@@ -6,12 +6,13 @@ export default async function handler(req, res) {
     const now = Math.floor(Date.now() / 1000);
     const sevenDaysFromNow = now + 7 * 24 * 60 * 60;
 
-    // We only expand customer + price (not product)
+    // Fetch subscriptions & expand customer + price (not product)
     const subs = await stripe.subscriptions.list({
       status: "active",
       expand: ["data.customer", "data.items.data.price"]
     });
 
+    // Subscriptions renewing within 7 days
     const upcoming = subs.data.filter(s => {
       const renewAt = s.current_period_end;
       return renewAt >= now && renewAt <= sevenDaysFromNow;
@@ -22,11 +23,14 @@ export default async function handler(req, res) {
       const item = sub.items.data[0];
       const priceObj = item.price;
 
-      // Fetch product separately (Stripe cannot expand this deep)
+      // Fetch product separately (Stripe cannot expand this deeply)
       const product = await stripe.products.retrieve(priceObj.product);
       const product_title = product.name;
 
+      // Customer name fallback
       const name = customer.name || customer.email.split("@")[0];
+
+      // Price
       const price = (priceObj.unit_amount / 100) + " kr";
 
       // Build interval text (svenska)
@@ -39,11 +43,14 @@ export default async function handler(req, res) {
           ? `varje ${map[interval]}`
           : `var ${count} ${map[interval]}`;
 
+      // Format date
       const renewal_date = new Date(sub.current_period_end * 1000)
         .toLocaleDateString("sv-SE");
 
+      // Customer portal
       const portal = process.env.PORTAL_LINK;
 
+      // Email message
       const text = `
 Hej ${name},
 
@@ -66,6 +73,7 @@ Varma hälsningar,
 Olivkassen
 `;
 
+      // Send email
       await sendEmail({
         to: customer.email,
         subject: "Din kommande Olivkassen-leverans",
