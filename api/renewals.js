@@ -2,7 +2,7 @@ import { stripe } from "../lib/stripe.js";
 import { sendEmail } from "../lib/sendgrid.js";
 
 export default async function handler(req, res) {
-  // --- GET = health check ---
+  // --- GET = sanity check ---
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
@@ -15,7 +15,7 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  // --- Auth ---
+  // --- CRON AUTH ---
   const expected = `Bearer ${process.env.CRON_SECRET}`;
   const received = req.headers.authorization;
 
@@ -24,51 +24,40 @@ export default async function handler(req, res) {
   }
 
   try {
-    const now = Math.floor(Date.now() / 1000);
-    const ninetyDaysFromNow = now + 90 * 24 * 60 * 60;
-
+    // 1️⃣ Fetch ALL active subscriptions
     const subs = await stripe.subscriptions.list({
       status: "active",
       expand: ["data.customer", "data.items.data.price"],
+      limit: 10,
     });
 
-    const upcoming = subs.data.filter(
-      s =>
-        s.current_period_end >= now &&
-        s.current_period_end <= ninetyDaysFromNow
-    );
+    if (!subs.data.length) {
+      return res.status(200).json({ ok: true, sent: 0, note: "No subscriptions" });
+    }
 
-    let sent = 0;
+    // 2️⃣ Pick FIRST subscription only (proof test)
+    const sub = subs.data[0];
+    const customer = sub.customer;
+    const priceObj = sub.items.data[0].price;
 
-    for (const sub of upcoming) {
-      const customer = sub.customer;
+    const product = await stripe.products.retrieve(priceObj.product);
 
-      // 🔒 TEST SAFETY: only send to YOU
-      if (customer.email !== "energyze@me.com") continue;
+    const price = `${priceObj.unit_amount / 100} kr`;
 
-      const item = sub.items.data[0];
-      const priceObj = item.price;
-      const product = await stripe.products.retrieve(priceObj.product);
+    const interval = priceObj.recurring.interval;
+    const count = priceObj.recurring.interval_count;
+    const map = { month: "månad", year: "år" };
 
-      const price = `${priceObj.unit_amount / 100} kr`;
+    const planInterval =
+      count === 1 ? `varje ${map[interval]}` : `var ${count} ${map[interval]}`;
 
-      const interval = priceObj.recurring.interval;
-      const count = priceObj.recurring.interval_count;
-      const map = { month: "månad", year: "år" };
+    const renewalDate = new Date(
+      sub.current_period_end * 1000
+    ).toLocaleDateString("sv-SE");
 
-      const planInterval =
-        count === 1
-          ? `varje ${map[interval]}`
-          : `var ${count} ${map[interval]}`;
-
-      const renewalDate = new Date(
-        sub.current_period_end * 1000
-      ).toLocaleDateString("sv-SE");
-
-      const name = customer.name || customer.email.split("@")[0];
-
-      const text = `
-Hej ${name},
+    // 3️⃣ ORIGINAL EMAIL CONTENT
+    const text = `
+Hej,
 
 Det börjar bli dags för nästa leverans av din Olivkassen:
 
@@ -84,19 +73,18 @@ Vänliga hälsningar,
 Olivkassen
 `.trim();
 
-      await sendEmail({
-        to: customer.email,
-        subject: "Din kommande Olivkassen-leverans",
-        text,
-      });
-
-      sent++;
-    }
+    // 4️⃣ SEND TO YOU ONLY
+    await sendEmail({
+      to: "energyze@me.com",
+      subject: "Din kommande Olivkassen-leverans",
+      text,
+    });
 
     return res.status(200).json({
       ok: true,
-      upcoming: upcoming.length,
-      sent,
+      upcoming: subs.data.length,
+      sent: 1,
+      note: "Proof email sent to test address only",
     });
   } catch (err) {
     console.error("RENEWALS ERROR:", err);
