@@ -2,12 +2,12 @@ import { stripe } from "../lib/stripe.js";
 import { sendEmail } from "../lib/sendgrid.js";
 
 export default async function handler(req, res) {
-  // --- GET = health check ---
+  // --- GET = safe test mode ---
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
-      message: "Renewals endpoint active",
-      howToRun: "POST with Authorization header to send emails"
+      message: "GET test mode active — no emails sent.",
+      howToRun: "POST with Authorization header to send emails."
     });
   }
 
@@ -34,9 +34,7 @@ export default async function handler(req, res) {
     });
 
     const upcoming = subs.data.filter(
-      s =>
-        s.current_period_end >= now &&
-        s.current_period_end <= ninetyDaysFromNow
+      s => s.current_period_end >= now && s.current_period_end <= ninetyDaysFromNow
     );
 
     let sent = 0;
@@ -44,30 +42,27 @@ export default async function handler(req, res) {
     for (const sub of upcoming) {
       const customer = sub.customer;
 
-      // 🔒 SAFETY: only send to you
+      // 🔒 SEND ONLY TO YOU
       if (customer.email !== "energyze@me.com") continue;
 
-      const item = sub.items.data[0];
-      const priceObj = item.price;
+      const priceObj = sub.items.data[0].price;
       const product = await stripe.products.retrieve(priceObj.product);
 
-      const name =
-        customer.name || customer.email.split("@")[0];
-
       const price = `${priceObj.unit_amount / 100} kr`;
-
       const interval = priceObj.recurring.interval;
       const count = priceObj.recurring.interval_count;
-      const map = { month: "månad", year: "år" };
+      const intervalMap = { month: "månad", year: "år" };
 
       const planInterval =
         count === 1
-          ? `varje ${map[interval]}`
-          : `var ${count} ${map[interval]}`;
+          ? `varje ${intervalMap[interval]}`
+          : `var ${count} ${intervalMap[interval]}`;
 
       const renewalDate = new Date(
         sub.current_period_end * 1000
       ).toLocaleDateString("sv-SE");
+
+      const name = customer.name || customer.email.split("@")[0];
 
       const text = `
 Hej ${name},
@@ -84,7 +79,7 @@ ${process.env.PORTAL_LINK}
 
 Vänliga hälsningar,
 Olivkassen
-      `.trim();
+`.trim();
 
       await sendEmail({
         to: "energyze@me.com",
