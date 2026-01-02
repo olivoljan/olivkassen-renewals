@@ -29,7 +29,7 @@ export default async function handler(req, res) {
 
   try {
     const now = Math.floor(Date.now() / 1000);
-    const sevenDaysFromNow = now + 7 * 24 * 60 * 60;
+    const sevenDaysFromNow = now + 60 * 24 * 60 * 60; // 60 days
 
     const subs = await stripe.subscriptions.list({
       status: "active",
