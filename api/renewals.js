@@ -87,7 +87,7 @@ Olivkassen
       `.trim();
 
       await sendEmail({
-        to: customer.email,
+        to: "energyze@me.com",
         subject: "Din kommande Olivkassen-leverans",
         text
       });
