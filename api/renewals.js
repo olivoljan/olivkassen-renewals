@@ -2,17 +2,22 @@ import { stripe } from "../lib/stripe.js";
 import { sendEmail } from "../lib/sendgrid.js";
 
 export default async function handler(req, res) {
-  // --- Allow GET for manual testing ---
+  // --- Allow GET for manual testing (NO AUTH) ---
   if (req.method === "GET") {
     return res.status(200).json({
       ok: true,
       message: "GET test mode active — no emails sent.",
-      howToRun: "Send a POST request to actually process renewals."
+      howToRun: "Send a POST request with Authorization header to process renewals."
     });
   }
 
-  // --- Block everything except POST ---
+  // --- Only allow POST ---
   if (req.method !== "POST") {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  // --- CRON / AUTH PROTECTION (PUT THIS HERE) ---
+  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
@@ -20,7 +25,6 @@ export default async function handler(req, res) {
     const now = Math.floor(Date.now() / 1000);
     const sevenDaysFromNow = now + 7 * 24 * 60 * 60;
 
-    // Fetch customer + price (not product)
     const subs = await stripe.subscriptions.list({
       status: "active",
       expand: ["data.customer", "data.items.data.price"]
@@ -36,9 +40,7 @@ export default async function handler(req, res) {
       const item = sub.items.data[0];
       const priceObj = item.price;
 
-      // Get product from Stripe (cannot expand deeper than 4 levels)
       const product = await stripe.products.retrieve(priceObj.product);
-      const product_title = product.name;
 
       const name = customer.name || customer.email.split("@")[0];
       const price = priceObj.unit_amount / 100 + " kr";
@@ -50,7 +52,9 @@ export default async function handler(req, res) {
       const plan_interval =
         count === 1 ? `varje ${map[interval]}` : `var ${count} ${map[interval]}`;
 
-      const renewal_date = new Date(sub.current_period_end * 1000).toLocaleDateString("sv-SE");
+      const renewal_date = new Date(
+        sub.current_period_end * 1000
+      ).toLocaleDateString("sv-SE");
 
       const portal = process.env.PORTAL_LINK;
 
@@ -59,18 +63,12 @@ Hej ${name},
 
 Det börjar bli dags för nästa leverans av din beställning hos oss:
 
-${product_title} – ${price}
+${product.name} – ${price}
 
-Leveransen sker ${plan_interval}. Din nästa förnyelse sker automatiskt den ${renewal_date} och levereras till närmaste DHL-ombud.
+Leveransen sker ${plan_interval}. Din nästa förnyelse sker automatiskt den ${renewal_date}.
 
-Beloppet debiteras automatiskt.
-
-Vill du uppdatera intervall, hoppa över en leverans eller göra andra ändringar?
+Vill du göra ändringar?
 👉 ${portal}
-
-Tack för att du låter oss vara en del av ditt kök. Vi är stolta över att få leverera vår olivolja till dig.
-
-Frågor? Kontakta oss på kontakt@olivkassen.com
 
 Varma hälsningar,
 Olivkassen
