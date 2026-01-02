@@ -29,7 +29,7 @@ export default async function handler(req, res) {
 
   try {
     const now = Math.floor(Date.now() / 1000);
-    const sevenDaysFromNow = now + 60 * 24 * 60 * 60; // 60 days
+    const sevenDaysFromNow = now + 90 * 24 * 60 * 60;
 
     const subs = await stripe.subscriptions.list({
       status: "active",
@@ -51,7 +51,7 @@ export default async function handler(req, res) {
     for (const sub of upcoming) {
     const customer = sub.customer;
 
-    if (customer.email !== "you@yourdomain.com") continue;
+    if (customer.email !== "energyze@me.com") continue;
 
     const price = sub.items.data[0].price;
     const product = await stripe.products.retrieve(price.product);
