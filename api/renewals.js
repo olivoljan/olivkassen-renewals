@@ -7,20 +7,19 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       message: "GET test mode active — no emails sent.",
-      howToRun: "Send a POST request with Authorization header to run cron."
+      howToRun: "Send a POST request with Authorization header to process renewals."
     });
   }
 
-  // --- Only POST allowed ---
+  // --- Only allow POST ---
   if (req.method !== "POST") {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  // --- DEBUG LOGS ---
+  // --- AUTH CHECK (must be AFTER POST check) ---
   console.log("AUTH HEADER:", req.headers.authorization);
   console.log("EXPECTED:", `Bearer ${process.env.CRON_SECRET}`);
 
-  // --- Cron auth ---
   if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(403).json({ error: "Forbidden" });
   }
