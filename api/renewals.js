@@ -62,7 +62,7 @@ Hej ${customer.name || ""},
 
 Det börjar bli dags för nästa leverans av din beställning hos oss:
 
-${product.name} – ${price} 
+${product.name} – ${price}kr
 
 Leveransen sker ${planInterval}. Din nästa förnyelse sker automatiskt den ${renewalDate} och levereras till närmaste DHL-ombud.
 
@@ -70,7 +70,7 @@ ${paymentLine}
 
 Vill du uppdatera betalningsuppgifter, byta intervall eller göra andra ändringar?
 
-👉 https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288
+👉 https://kundportal.olivkassen.com
 
 Tack för att du låter oss vara en del av ditt kök. Vi är stolta över att få leverera vår olivolja till dig och hoppas att den fortsätter att sätta guldkant på dina måltider.
 
