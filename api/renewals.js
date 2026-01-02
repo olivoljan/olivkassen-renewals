@@ -10,12 +10,12 @@ export default async function handler(req, res) {
     });
   }
 
-  // --- Only POST allowed ---
+  // --- Only POST ---
   if (req.method !== "POST") {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  // --- AUTH ---
+  // --- Auth ---
   const expected = `Bearer ${process.env.CRON_SECRET}`;
   const received = req.headers.authorization;
 
@@ -23,28 +23,32 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  let sent = 0;
-
   try {
-    // 🔴 Pull ONE active subscription with real data
+    const now = Math.floor(Date.now() / 1000);
+    const ninetyDaysFromNow = now + 90 * 24 * 60 * 60;
+
     const subs = await stripe.subscriptions.list({
       status: "active",
-      limit: 5,
       expand: ["data.customer", "data.items.data.price"],
     });
 
-    for (const sub of subs.data) {
+    const upcoming = subs.data.filter(
+      s =>
+        s.current_period_end >= now &&
+        s.current_period_end <= ninetyDaysFromNow
+    );
+
+    let sent = 0;
+
+    for (const sub of upcoming) {
       const customer = sub.customer;
 
-      // 🔒 SAFETY: only send to you
+      // 🔒 TEST SAFETY: only send to YOU
       if (customer.email !== "energyze@me.com") continue;
 
       const item = sub.items.data[0];
       const priceObj = item.price;
       const product = await stripe.products.retrieve(priceObj.product);
-
-      const name =
-        customer.name || customer.email.split("@")[0];
 
       const price = `${priceObj.unit_amount / 100} kr`;
 
@@ -61,7 +65,8 @@ export default async function handler(req, res) {
         sub.current_period_end * 1000
       ).toLocaleDateString("sv-SE");
 
-      // ✅ ORIGINAL REAL EMAIL TEXT
+      const name = customer.name || customer.email.split("@")[0];
+
       const text = `
 Hej ${name},
 
@@ -80,17 +85,17 @@ Olivkassen
 `.trim();
 
       await sendEmail({
-        to: "energyze@me.com",
+        to: customer.email,
         subject: "Din kommande Olivkassen-leverans",
         text,
       });
 
       sent++;
-      break; // 🔒 send ONE email only
     }
 
     return res.status(200).json({
       ok: true,
+      upcoming: upcoming.length,
       sent,
     });
   } catch (err) {
