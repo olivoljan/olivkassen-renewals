@@ -1,54 +1,100 @@
+import { stripe } from "../lib/stripe.js";
 import { sendEmail } from "../lib/sendgrid.js";
 
 export default async function handler(req, res) {
-  // Allow POST only
-  if (req.method !== "POST") {
-    return res.status(200).json({ ok: true, message: "Use POST" });
+  // --- GET = health check ---
+  if (req.method === "GET") {
+    return res.status(200).json({
+      ok: true,
+      message: "Renewals endpoint alive",
+    });
   }
 
-  // Auth check
+  // --- Only POST allowed ---
+  if (req.method !== "POST") {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  // --- AUTH ---
   const expected = `Bearer ${process.env.CRON_SECRET}`;
   const received = req.headers.authorization;
-
-  console.log("AUTH:", received);
-  console.log("EXPECTED:", expected);
 
   if (received !== expected) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
+  let sent = 0;
+
   try {
-    // 🔥 FASTEST PROOF EMAIL
-    await sendEmail({
-      to: "energyze@me.com",
-      subject: "Olivkassen – proof test email",
-      text: `
-Hej!
-
-This is a proof test email.
-
-If you received this, then:
-- SendGrid works
-- Domain auth works
-- API key works
-- Vercel env vars work
-
-Timestamp: ${new Date().toISOString()}
-
-– Olivkassen
-      `.trim(),
+    // 🔴 Pull ONE active subscription with real data
+    const subs = await stripe.subscriptions.list({
+      status: "active",
+      limit: 5,
+      expand: ["data.customer", "data.items.data.price"],
     });
+
+    for (const sub of subs.data) {
+      const customer = sub.customer;
+
+      // 🔒 SAFETY: only send to you
+      if (customer.email !== "energyze@me.com") continue;
+
+      const item = sub.items.data[0];
+      const priceObj = item.price;
+      const product = await stripe.products.retrieve(priceObj.product);
+
+      const name =
+        customer.name || customer.email.split("@")[0];
+
+      const price = `${priceObj.unit_amount / 100} kr`;
+
+      const interval = priceObj.recurring.interval;
+      const count = priceObj.recurring.interval_count;
+      const map = { month: "månad", year: "år" };
+
+      const planInterval =
+        count === 1
+          ? `varje ${map[interval]}`
+          : `var ${count} ${map[interval]}`;
+
+      const renewalDate = new Date(
+        sub.current_period_end * 1000
+      ).toLocaleDateString("sv-SE");
+
+      // ✅ ORIGINAL REAL EMAIL TEXT
+      const text = `
+Hej ${name},
+
+Det börjar bli dags för nästa leverans av din Olivkassen:
+
+${product.name} – ${price}
+
+Leverans: ${planInterval}
+Förnyelse: ${renewalDate}
+
+Hantera abonnemang:
+${process.env.PORTAL_LINK}
+
+Vänliga hälsningar,
+Olivkassen
+`.trim();
+
+      await sendEmail({
+        to: "energyze@me.com",
+        subject: "Din kommande Olivkassen-leverans",
+        text,
+      });
+
+      sent++;
+      break; // 🔒 send ONE email only
+    }
 
     return res.status(200).json({
       ok: true,
-      sent: 1,
-      message: "Proof email sent",
+      sent,
     });
   } catch (err) {
-    console.error("SEND ERROR:", err);
-    return res.status(500).json({
-      error: err.message,
-      details: err?.response?.body || null,
-    });
+    console.error("RENEWALS ERROR:", err);
+    return res.status(500).json({ error: err.message });
   }
 }
