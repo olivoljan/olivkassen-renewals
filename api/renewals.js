@@ -2,92 +2,93 @@ import { stripe } from "../lib/stripe.js";
 import { sendEmail } from "../lib/sendgrid.js";
 
 export default async function handler(req, res) {
-  // --- GET = sanity check ---
-  if (req.method === "GET") {
-    return res.status(200).json({
-      ok: true,
-      message: "Renewals endpoint alive",
-    });
-  }
-
-  // --- Only POST ---
   if (req.method !== "POST") {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  // --- CRON AUTH ---
-  const expected = `Bearer ${process.env.CRON_SECRET}`;
-  const received = req.headers.authorization;
-
-  if (received !== expected) {
+  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
   try {
-    // 1️⃣ Fetch ALL active subscriptions
     const subs = await stripe.subscriptions.list({
       status: "active",
-      expand: ["data.customer", "data.items.data.price"],
-      limit: 10,
+      expand: [
+        "data.customer",
+        "data.items.data.price",
+        "data.default_payment_method",
+      ],
+      limit: 1, // proof test
     });
 
-    if (!subs.data.length) {
-      return res.status(200).json({ ok: true, sent: 0, note: "No subscriptions" });
-    }
-
-    // 2️⃣ Pick FIRST subscription only (proof test)
     const sub = subs.data[0];
     const customer = sub.customer;
     const priceObj = sub.items.data[0].price;
-
     const product = await stripe.products.retrieve(priceObj.product);
 
-    const price = `${priceObj.unit_amount / 100} kr`;
-
-    const interval = priceObj.recurring.interval;
-    const count = priceObj.recurring.interval_count;
-    const map = { month: "månad", year: "år" };
-
-    const planInterval =
-      count === 1 ? `varje ${map[interval]}` : `var ${count} ${map[interval]}`;
-
+    // --- Renewal date ---
     const renewalDate = new Date(
       sub.current_period_end * 1000
     ).toLocaleDateString("sv-SE");
 
-    // 3️⃣ ORIGINAL EMAIL CONTENT
+    // --- Interval ---
+    const count = priceObj.recurring.interval_count;
+    const interval = priceObj.recurring.interval;
+    const map = { month: "månad", year: "år" };
+    const planInterval =
+      count === 1 ? `varje ${map[interval]}` : `var ${count} ${map[interval]}`;
+
+    // --- Price ---
+    const price = priceObj.unit_amount / 100;
+
+    // --- PAYMENT METHOD LOGIC ---
+    let paymentLine = "Beloppet debiteras automatiskt.";
+
+    const pm =
+      sub.default_payment_method ||
+      customer.invoice_settings?.default_payment_method;
+
+    if (pm) {
+      if (pm.type === "card") {
+        paymentLine = `Beloppet debiteras från ditt kort (•••• ${pm.card.last4}).`;
+      } else if (pm.type === "klarna") {
+        paymentLine = "Beloppet betalas via Klarna.";
+      }
+    }
+
+    // --- EMAIL TEXT ---
     const text = `
-Hej,
+Hej ${customer.name || ""},
 
-Det börjar bli dags för nästa leverans av din Olivkassen:
+Det börjar bli dags för nästa leverans av din beställning hos oss:
 
-${product.name} – ${price}
+${product.name} – ${price} 
 
-Leverans: ${planInterval}
-Förnyelse: ${renewalDate}
+Leveransen sker ${planInterval}. Din nästa förnyelse sker automatiskt den ${renewalDate} och levereras till närmaste DHL-ombud.
 
-Hantera abonnemang:
-${process.env.PORTAL_LINK}
+${paymentLine}
 
-Vänliga hälsningar,
+Vill du uppdatera betalningsuppgifter, byta intervall eller göra andra ändringar?
+
+👉 https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288
+
+Tack för att du låter oss vara en del av ditt kök. Vi är stolta över att få leverera vår olivolja till dig och hoppas att den fortsätter att sätta guldkant på dina måltider.
+
+Frågor? Kontakta oss på kontakt@olivkassen.com
+
+Varma hälsningar,
 Olivkassen
 `.trim();
 
-    // 4️⃣ SEND TO YOU ONLY
     await sendEmail({
-      to: "energyze@me.com",
-      subject: "Din kommande Olivkassen-leverans",
+      to: "energyze@me.com", // still safe test
+      subject: "Snart dags för nästa leverans från Olivkassen",
       text,
     });
 
-    return res.status(200).json({
-      ok: true,
-      upcoming: subs.data.length,
-      sent: 1,
-      note: "Proof email sent to test address only",
-    });
+    return res.status(200).json({ ok: true, sent: 1 });
   } catch (err) {
-    console.error("RENEWALS ERROR:", err);
+    console.error(err);
     return res.status(500).json({ error: err.message });
   }
 }
