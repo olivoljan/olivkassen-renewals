@@ -49,16 +49,19 @@ export default async function handler(req, res) {
 
     /* === ENABLE LATER ===
     for (const sub of upcoming) {
-      const customer = sub.customer;
-      const price = sub.items.data[0].price;
-      const product = await stripe.products.retrieve(price.product);
+    const customer = sub.customer;
 
-      await sendEmail({
-        to: customer.email,
-        subject: "Your upcoming Olivkassen delivery",
-        text: `Your next delivery: ${product.name}`
-      });
-    }
+    if (customer.email !== "you@yourdomain.com") continue;
+
+    const price = sub.items.data[0].price;
+    const product = await stripe.products.retrieve(price.product);
+
+    await sendEmail({
+      to: customer.email,
+      subject: "Your upcoming Olivkassen delivery",
+      text: "..."
+    });
+  }
     */
   } catch (err) {
     console.error("RENEWALS ERROR:", err);
