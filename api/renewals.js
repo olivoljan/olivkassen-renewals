@@ -1,20 +1,12 @@
 import { sendEmail } from "../lib/sendgrid.js";
 
 export default async function handler(req, res) {
-  // Allow GET for sanity check
-  if (req.method === "GET") {
-    return res.status(200).json({
-      ok: true,
-      message: "GET ok – endpoint alive",
-    });
-  }
-
-  // Only POST
+  // Allow POST only
   if (req.method !== "POST") {
-    return res.status(403).json({ error: "Forbidden" });
+    return res.status(200).json({ ok: true, message: "Use POST" });
   }
 
-  // CRON AUTH
+  // Auth check
   const expected = `Bearer ${process.env.CRON_SECRET}`;
   const received = req.headers.authorization;
 
@@ -26,34 +18,37 @@ export default async function handler(req, res) {
   }
 
   try {
-    console.log("SENDING TEST EMAIL NOW");
-
+    // 🔥 FASTEST PROOF EMAIL
     await sendEmail({
       to: "energyze@me.com",
-      subject: "✅ Olivkassen – proof test email",
+      subject: "Olivkassen – proof test email",
       text: `
 Hej!
 
-Om du får detta mail fungerar:
-- Vercel
-- CRON auth
-- SendGrid
-- DNS
-- API-nyckel
+This is a proof test email.
 
-Nästa steg är Stripe-logiken.
+If you received this, then:
+- SendGrid works
+- Domain auth works
+- API key works
+- Vercel env vars work
 
-Mvh
-Olivkassen
+Timestamp: ${new Date().toISOString()}
+
+– Olivkassen
       `.trim(),
     });
 
     return res.status(200).json({
       ok: true,
       sent: 1,
+      message: "Proof email sent",
     });
   } catch (err) {
     console.error("SEND ERROR:", err);
-    return res.status(500).json({ error: err.message });
+    return res.status(500).json({
+      error: err.message,
+      details: err?.response?.body || null,
+    });
   }
 }
