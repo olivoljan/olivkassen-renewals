@@ -105,7 +105,7 @@ export default async function handler(req, res) {
 
     // 3️⃣ FORCE SEND (test email only)
     await sgMail.send({
-      to: "energyze@me.com",
+      to: "dalaart.official@gmail.com",
       from: "kontakt@olivkassen.com",
       subject: "Snart dags för nästa leverans",
       html
