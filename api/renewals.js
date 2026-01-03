@@ -6,89 +6,146 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+  const expected = `Bearer ${process.env.CRON_SECRET}`;
+  if (req.headers.authorization !== expected) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
   try {
+    const now = Math.floor(Date.now() / 1000);
+    const ninetyDaysFromNow = now + 90 * 24 * 60 * 60;
+
     const subs = await stripe.subscriptions.list({
       status: "active",
       expand: [
         "data.customer",
         "data.items.data.price",
-        "data.default_payment_method",
-      ],
-      limit: 1, // proof test
+        "data.latest_invoice.payment_intent"
+      ]
     });
 
-    const sub = subs.data[0];
-    const customer = sub.customer;
-    const priceObj = sub.items.data[0].price;
-    const product = await stripe.products.retrieve(priceObj.product);
+    const upcoming = subs.data.filter(
+      s => s.current_period_end >= now &&
+           s.current_period_end <= ninetyDaysFromNow
+    );
 
-    // --- Renewal date ---
-    const renewalDate = new Date(
-      sub.current_period_end * 1000
-    ).toLocaleDateString("sv-SE");
+    let sent = 0;
 
-    // --- Interval ---
-    const count = priceObj.recurring.interval_count;
-    const interval = priceObj.recurring.interval;
-    const map = { month: "månad", year: "år" };
-    const planInterval =
-      count === 1 ? `varje ${map[interval]}` : `var ${count} ${map[interval]}`;
+    for (const sub of upcoming) {
+      const customer = sub.customer;
+      if (!customer?.email) continue;
 
-    // --- Price ---
-    const price = priceObj.unit_amount / 100;
+      const priceObj = sub.items.data[0].price;
+      const product = await stripe.products.retrieve(priceObj.product);
 
-    // --- PAYMENT METHOD LOGIC ---
-    let paymentLine = "Beloppet debiteras automatiskt.";
+      const renewalDate = new Date(
+        sub.current_period_end * 1000
+      ).toLocaleDateString("sv-SE");
 
-    const pm =
-      sub.default_payment_method ||
-      customer.invoice_settings?.default_payment_method;
+      const planInterval =
+        priceObj.recurring?.interval === "month"
+          ? "månad"
+          : priceObj.recurring?.interval === "year"
+          ? "år"
+          : "period";
 
-    if (pm) {
-      if (pm.type === "card") {
-        paymentLine = `Beloppet debiteras från ditt kort (•••• ${pm.card.last4}).`;
-      } else if (pm.type === "klarna") {
-        paymentLine = "Beloppet betalas via Klarna.";
-      }
-    }
+      const price = Math.round(priceObj.unit_amount / 100);
 
-    // --- EMAIL TEXT ---
-    const text = `
+      const text = `
 Hej ${customer.name || ""},
 
 Det börjar bli dags för nästa leverans av din beställning hos oss:
 
-${product.name} – ${price}kr
+${product.name} – ${price} kr
 
-Leveransen sker ${planInterval}. Din nästa förnyelse sker automatiskt den ${renewalDate} och levereras till närmaste DHL-ombud.
+Leveransen sker var ${planInterval}.
+Din nästa förnyelse sker automatiskt den ${renewalDate}.
 
-${paymentLine}
-
-Vill du uppdatera betalningsuppgifter, byta intervall eller göra andra ändringar?
-
-👉 https://kundportal.olivkassen.com
-
-Tack för att du låter oss vara en del av ditt kök. Vi är stolta över att få leverera vår olivolja till dig och hoppas att den fortsätter att sätta guldkant på dina måltider.
-
-Frågor? Kontakta oss på kontakt@olivkassen.com
+Hantera ditt abonnemang:
+${process.env.PORTAL_LINK}
 
 Varma hälsningar,
 Olivkassen
 `.trim();
 
-    await sendEmail({
-      to: "energyze@me.com", // still safe test
-      subject: "Snart dags för nästa leverans från Olivkassen",
-      text,
-    });
+      const html = `
+<div style="
+  background:#ffffff;
+  color:#111111;
+  font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  padding:24px;
+  max-width:560px;
+  margin:0 auto;
+">
+  <img
+    src="https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/67a38a8645686cca76b775ec_olivkassen-logo.svg"
+    alt="Olivkassen"
+    style="width:140px;max-width:40%;margin-bottom:24px;"
+  />
 
-    return res.status(200).json({ ok: true, sent: 1 });
+  <p>Hej ${customer.name || ""},</p>
+
+  <p>Det börjar bli dags för nästa leverans av din beställning hos oss:</p>
+
+  <p style="font-size:16px;font-weight:500;margin:16px 0;">
+    ${product.name} – ${price} kr
+  </p>
+
+  <p>
+    Leveransen sker var ${planInterval}.<br/>
+    Din nästa förnyelse sker automatiskt den <strong>${renewalDate}</strong>
+    och levereras till närmaste DHL-ombud.
+  </p>
+
+  <div style="margin:28px 0;">
+    <a href="https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288"
+       style="
+         display:inline-block;
+         padding:14px 22px;
+         background:#111111;
+         color:#ffffff;
+         text-decoration:none;
+         border-radius:6px;
+         font-weight:600;
+       ">
+      Kundportal
+    </a>
+  </div>
+
+  <p>
+    Tack för att du låter oss vara en del av ditt kök. Vi är stolta över att få
+    leverera vår olivolja till dig.
+  </p>
+
+  <p>
+    Frågor? Kontakta oss på
+    <a href="mailto:kontakt@olivkassen.com">kontakt@olivkassen.com</a>
+  </p>
+
+  <p style="margin-top:32px;">
+    Varma hälsningar,<br/>
+    <strong>Olivkassen</strong>
+  </p>
+</div>
+      `.trim();
+
+      await sendEmail({
+        to: customer.email,
+        subject: "Snart dags för nästa leverans",
+        text,
+        html
+      });
+
+      sent++;
+    }
+
+    return res.status(200).json({
+      ok: true,
+      upcoming: upcoming.length,
+      sent
+    });
   } catch (err) {
-    console.error(err);
+    console.error("RENEWALS ERROR:", err);
     return res.status(500).json({ error: err.message });
   }
 }
