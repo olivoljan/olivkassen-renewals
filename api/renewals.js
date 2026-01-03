@@ -2,12 +2,24 @@ import { stripe } from "../lib/stripe.js";
 import { sendEmail } from "../lib/sendgrid.js";
 
 export default async function handler(req, res) {
+  // --- Allow GET for sanity check ---
+  if (req.method === "GET") {
+    return res.status(200).json({
+      ok: true,
+      message: "Renewals endpoint alive"
+    });
+  }
+
+  // --- Only POST ---
   if (req.method !== "POST") {
     return res.status(403).json({ error: "Forbidden" });
   }
 
+  // --- CRON AUTH ---
   const expected = `Bearer ${process.env.CRON_SECRET}`;
-  if (req.headers.authorization !== expected) {
+  const received = req.headers.authorization;
+
+  if (received !== expected) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
@@ -19,14 +31,15 @@ export default async function handler(req, res) {
       status: "active",
       expand: [
         "data.customer",
-        "data.items.data.price",
-        "data.latest_invoice.payment_intent"
+        "data.items.data.price.product",
+        "data.default_payment_method"
       ]
     });
 
     const upcoming = subs.data.filter(
-      s => s.current_period_end >= now &&
-           s.current_period_end <= ninetyDaysFromNow
+      s =>
+        s.current_period_end >= now &&
+        s.current_period_end <= ninetyDaysFromNow
     );
 
     let sent = 0;
@@ -35,104 +48,98 @@ export default async function handler(req, res) {
       const customer = sub.customer;
       if (!customer?.email) continue;
 
-      const priceObj = sub.items.data[0].price;
-      const product = await stripe.products.retrieve(priceObj.product);
+      // 🔒 HARD TEST LOCK — REMOVE WHEN GOING LIVE
+      if (customer.email !== "energyze@me.com") continue;
+
+      const item = sub.items.data[0];
+      const product = item.price.product;
+      const price = (item.price.unit_amount / 100).toFixed(0);
 
       const renewalDate = new Date(
         sub.current_period_end * 1000
       ).toLocaleDateString("sv-SE");
 
+      const intervalMap = {
+        month: "varje månad",
+        year: "varje år"
+      };
+
       const planInterval =
-        priceObj.recurring?.interval === "month"
-          ? "månad"
-          : priceObj.recurring?.interval === "year"
-          ? "år"
-          : "period";
-
-      const price = Math.round(priceObj.unit_amount / 100);
-
-      const text = `
-Hej ${customer.name || ""},
-
-Det börjar bli dags för nästa leverans av din beställning hos oss:
-
-${product.name} – ${price} kr
-
-Leveransen sker var ${planInterval}.
-Din nästa förnyelse sker automatiskt den ${renewalDate}.
-
-Hantera ditt abonnemang:
-${process.env.PORTAL_LINK}
-
-Varma hälsningar,
-Olivkassen
-`.trim();
+        intervalMap[item.price.recurring.interval] ??
+        item.price.recurring.interval;
 
       const html = `
-<div style="
-  background:#ffffff;
-  color:#111111;
-  font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
-  padding:24px;
-  max-width:560px;
-  margin:0 auto;
-">
-  <img
-    src="https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/67a38a8645686cca76b775ec_olivkassen-logo.svg"
-    alt="Olivkassen"
-    style="width:140px;max-width:40%;margin-bottom:24px;"
-  />
+<!doctype html>
+<html>
+  <body style="margin:0;background:#0f0f0f;color:#ffffff;font-family:Inter,Arial,sans-serif;">
+    <table width="100%" cellpadding="0" cellspacing="0">
+      <tr>
+        <td align="center">
+          <table width="600" style="max-width:600px;padding:32px">
+            <tr>
+              <td align="center" style="padding-bottom:24px">
+                <img src="https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/67a38a8645686cca76b775ec_olivkassen-logo.svg"
+                     width="160"
+                     style="display:block" />
+              </td>
+            </tr>
 
-  <p>Hej ${customer.name || ""},</p>
+            <tr>
+              <td style="font-size:16px;line-height:1.6">
+                <p>Hej ${customer.name || ""},</p>
 
-  <p>Det börjar bli dags för nästa leverans av din beställning hos oss:</p>
+                <p>Det börjar bli dags för nästa leverans av din beställning hos oss:</p>
 
-  <p style="font-size:16px;font-weight:500;margin:16px 0;">
-    ${product.name} – ${price} kr
-  </p>
+                <p style="font-size:18px;font-weight:500;margin:24px 0">
+                  ${product.name} – ${price} kr
+                </p>
 
-  <p>
-    Leveransen sker var ${planInterval}.<br/>
-    Din nästa förnyelse sker automatiskt den <strong>${renewalDate}</strong>
-    och levereras till närmaste DHL-ombud.
-  </p>
+                <p>
+                  Leveransen sker ${planInterval}. Din nästa förnyelse sker automatiskt den
+                  <strong>${renewalDate}</strong> och levereras till närmaste DHL-ombud.
+                </p>
 
-  <div style="margin:28px 0;">
-    <a href="https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288"
-       style="
-         display:inline-block;
-         padding:14px 22px;
-         background:#111111;
-         color:#ffffff;
-         text-decoration:none;
-         border-radius:6px;
-         font-weight:600;
-       ">
-      Kundportal
-    </a>
-  </div>
+                <p style="margin:32px 0;text-align:center">
+                  <a href="https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288"
+                     style="
+                       background:#ffffff;
+                       color:#000000;
+                       padding:14px 22px;
+                       border-radius:6px;
+                       text-decoration:none;
+                       font-weight:600;
+                       display:inline-block;">
+                    Kundportal
+                  </a>
+                </p>
 
-  <p>
-    Tack för att du låter oss vara en del av ditt kök. Vi är stolta över att få
-    leverera vår olivolja till dig.
-  </p>
+                <p>
+                  Tack för att du låter oss vara en del av ditt kök. Vi är stolta över att få
+                  leverera vår olivolja till dig och hoppas att den fortsätter att sätta
+                  guldkant på dina måltider.
+                </p>
 
-  <p>
-    Frågor? Kontakta oss på
-    <a href="mailto:kontakt@olivkassen.com">kontakt@olivkassen.com</a>
-  </p>
+                <p>
+                  Frågor? Kontakta oss på
+                  <a href="mailto:kontakt@olivkassen.com" style="color:#ffffff">
+                    kontakt@olivkassen.com
+                  </a>
+                </p>
 
-  <p style="margin-top:32px;">
-    Varma hälsningar,<br/>
-    <strong>Olivkassen</strong>
-  </p>
-</div>
+                <p>Varma hälsningar,<br/>Olivkassen</p>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
       `.trim();
 
       await sendEmail({
         to: customer.email,
-        subject: "Snart dags för nästa leverans",
-        text,
+        subject: "Snart dags för nästa Olivkassen-leverans",
         html
       });
 
