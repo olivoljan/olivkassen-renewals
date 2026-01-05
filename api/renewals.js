@@ -4,24 +4,6 @@ import sgMail from "@sendgrid/mail";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-// ---- Helpers ----
-function formatSwedishDate(unixSeconds) {
-  return new Date(unixSeconds * 1000).toLocaleDateString("sv-SE", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-}
-
-function getPlanInterval(price) {
-  if (price.recurring?.interval === "month") {
-    if (price.recurring.interval_count === 1) return "varje månad";
-    if (price.recurring.interval_count === 3) return "var tredje månad";
-    if (price.recurring.interval_count === 6) return "var sjätte månad";
-  }
-  return "enligt abonnemang";
-}
-
 export default async function handler(req, res) {
   try {
     // ---- AUTH ----
@@ -43,18 +25,27 @@ export default async function handler(req, res) {
       const customer = sub.customer;
       if (!customer?.email) continue;
 
-      // 🔒 ONLY CHECK THIS REAL SUBSCRIPTION
+      // 🔒 ONLY TEST AGAINST THIS SUBSCRIPTION
       if (customer.email !== "cristina.coloman@gmail.com") continue;
 
       const item = sub.items.data[0];
       const price = item.price;
 
-      const templateData = {
+      const interval =
+        price.recurring.interval === "month"
+          ? price.recurring.interval_count === 1
+            ? "varje månad"
+            : `var ${price.recurring.interval_count} månader`
+          : "enligt avtal";
+
+      const variables = {
         name: customer.name || "vän",
         product_title: price.nickname || "Olivkassen",
         price: (price.unit_amount / 100).toFixed(0),
-        plan_interval: getPlanInterval(price),
-        renewal_date: formatSwedishDate(sub.current_period_end),
+        plan_interval: interval,
+        renewal_date: new Date(
+          sub.current_period_end * 1000
+        ).toISOString().split("T")[0],
         portal_url:
           "https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288",
         logo_url:
@@ -62,22 +53,19 @@ export default async function handler(req, res) {
       };
 
       await sgMail.send({
-        to: "olivkassen@gmail.com", // ✅ TEST INBOX
+        to: "olivkassen@gmail.com", // ✅ test inbox
         from: {
           email: "kontakt@olivkassen.com",
           name: "Olivkassen",
         },
         templateId: "d-fe01cb7634114535a27600e27d48c5d3",
-        dynamicTemplateData: templateData,
+        dynamicTemplateData: variables,
       });
 
       sent++;
     }
 
-    return res.status(200).json({
-      ok: true,
-      sent,
-    });
+    return res.status(200).json({ ok: true, sent });
   } catch (err) {
     console.error("RENEWALS ERROR:", err);
     return res.status(500).json({ error: err.message });
