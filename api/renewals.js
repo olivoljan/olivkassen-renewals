@@ -15,16 +15,15 @@ export default async function handler(req, res) {
     }
 
     const NOW = Math.floor(Date.now() / 1000);
-    const IN_24_DAYS = NOW + 24 * 24 * 60 * 60;
+    const IN_24_DAYS = NOW + 25 * 24 * 60 * 60; // +1 day buffer
 
     const subscriptions = await stripe.subscriptions.list({
       status: "active",
-      limit: 100,
       expand: [
         "data.customer",
         "data.items.data.price",
-        "data.items.data.price.product", // ✅ IMPORTANT
       ],
+      limit: 100,
     });
 
     let checked = 0;
@@ -41,23 +40,29 @@ export default async function handler(req, res) {
       const customer = sub.customer;
       if (!customer?.email) continue;
 
-      // 🔒 TEST MODE — always safe inbox
+      // 🔒 TEST MODE — real data, safe inbox
       const TO_EMAIL = "olivkassen@gmail.com";
 
       const item = sub.items.data[0];
       const price = item.price;
-      const product = price.product;
 
+      // ---- FETCH PRODUCT (IMPORTANT FIX) ----
+      const product = await stripe.products.retrieve(price.product);
+
+      // ---- INTERVAL TEXT ----
       const intervalText =
         price.recurring.interval === "month" && price.recurring.interval_count === 1
           ? "varje månad"
           : price.recurring.interval === "month"
-          ? `var ${price.recurring.interval_count} månad`
+          ? `var ${price.recurring.interval_count}:e månad`
           : "återkommande";
+
+      // ---- FRIENDLY PRODUCT NAME ----
+      const productTitle = `${product.name} – ${price.unit_amount / 100} kr (${intervalText})`;
 
       const variables = {
         name: customer.name || "vän",
-        product_title: product?.name || "Olivkassen prenumeration", // ✅ FIX
+        product_title: productTitle,
         price: (price.unit_amount / 100).toFixed(0),
         plan_interval: intervalText,
         renewal_date: new Date(sub.current_period_end * 1000)
