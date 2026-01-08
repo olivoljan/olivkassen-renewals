@@ -8,7 +8,7 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 // 🔧 CONFIG — CHANGE THESE WHEN TESTING
-const SOURCE_EMAIL = "ewa_nilsson@hotmail.com"; // 👈 customer to pull data from
+const SOURCE_EMAIL = "energyze@me.com"; // 👈 customer to pull data from
 const TO_EMAIL = "olivkassen@gmail.com";        // 👈 always send here (test)
 const DAYS_AHEAD = 25;
 
