@@ -19,8 +19,12 @@ export default async function handler(req, res) {
 
     const subscriptions = await stripe.subscriptions.list({
       status: "active",
-      expand: ["data.customer", "data.items.data.price"],
       limit: 100,
+      expand: [
+        "data.customer",
+        "data.items.data.price",
+        "data.items.data.price.product", // ✅ IMPORTANT
+      ],
     });
 
     let checked = 0;
@@ -37,11 +41,12 @@ export default async function handler(req, res) {
       const customer = sub.customer;
       if (!customer?.email) continue;
 
-      // 🔒 TEST MODE — real data, safe inbox
+      // 🔒 TEST MODE — always safe inbox
       const TO_EMAIL = "olivkassen@gmail.com";
 
       const item = sub.items.data[0];
       const price = item.price;
+      const product = price.product;
 
       const intervalText =
         price.recurring.interval === "month" && price.recurring.interval_count === 1
@@ -52,7 +57,7 @@ export default async function handler(req, res) {
 
       const variables = {
         name: customer.name || "vän",
-        product_title: price.description || "Olivkassen prenumeration",
+        product_title: product?.name || "Olivkassen prenumeration", // ✅ FIX
         price: (price.unit_amount / 100).toFixed(0),
         plan_interval: intervalText,
         renewal_date: new Date(sub.current_period_end * 1000)
@@ -60,7 +65,7 @@ export default async function handler(req, res) {
           .split("T")[0],
         portal_url: "https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288",
         logo_url:
-          "https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/67a38a8645686cca76b775ec_olivkassen-logo.svg",
+          "https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/695c27864df0f98b1754712a_olivkassen-logo%402x.png",
       };
 
       try {
