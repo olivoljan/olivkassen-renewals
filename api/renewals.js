@@ -52,7 +52,7 @@ export default async function handler(req, res) {
 
       const variables = {
         name: customer.name || "vän",
-        product_title: price.nickname || "Olivkassen prenumeration",
+        product_title: price.description || "Olivkassen prenumeration",
         price: (price.unit_amount / 100).toFixed(0),
         plan_interval: intervalText,
         renewal_date: new Date(sub.current_period_end * 1000)
