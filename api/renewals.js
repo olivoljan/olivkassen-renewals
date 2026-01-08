@@ -9,7 +9,6 @@ sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
 export default async function handler(req, res) {
   try {
-    // ---- AUTH ----
     if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
       return res.status(403).json({ error: "Forbidden" });
     }
@@ -17,65 +16,48 @@ export default async function handler(req, res) {
     const NOW = Math.floor(Date.now() / 1000);
     const IN_24_DAYS = NOW + 24 * 24 * 60 * 60;
 
-    // ---- FETCH SUBSCRIPTIONS ----
     const subscriptions = await stripe.subscriptions.list({
       status: "active",
-      expand: [
-        "data.customer",
-        "data.items.data.price",
-        "data.items.data.price.product",
-      ],
+      expand: ["data.customer", "data.items.data.price"],
       limit: 100,
     });
 
-    // ---- FILTER ELIGIBLE (NEXT 24 DAYS) ----
+    // Only subs renewing within 24 days
     const eligibleSubs = subscriptions.data.filter(
-      (sub) =>
-        sub.current_period_end <= IN_24_DAYS &&
-        sub.customer &&
-        sub.customer.email
+      (sub) => sub.current_period_end <= IN_24_DAYS
     );
 
-    if (eligibleSubs.length === 0) {
-      return res.status(200).json({
-        ok: true,
-        checked: subscriptions.data.length,
-        eligible: 0,
-        sent: 0,
-        reason: "No renewals within 24 days",
-        testMode: true,
-      });
+    if (!eligibleSubs.length) {
+      return res.status(200).json({ ok: true, sent: 0 });
     }
 
-    // ---- PICK RANDOM REAL CUSTOMER ----
+    // 🎯 Pick ONE random real subscription
     const sub =
       eligibleSubs[Math.floor(Math.random() * eligibleSubs.length)];
 
     const customer = sub.customer;
-    const item = sub.items.data[0];
-    const price = item.price;
-    const product = price.product;
-
-    // ---- INTERVAL TEXT (NO 'återkommande') ----
-    let intervalText = "";
-    if (price.recurring?.interval === "month") {
-      if (price.recurring.interval_count === 1) {
-        intervalText = "varje månad";
-      } else {
-        intervalText = `var ${price.recurring.interval_count}:e månad`;
-      }
+    if (!customer?.email) {
+      return res.status(200).json({ ok: true, sent: 0 });
     }
 
-    // ---- CLEAN PRODUCT NAME ----
-    const productTitle =
-      product?.name || "Olivkassen prenumeration";
+    const item = sub.items.data[0];
+    const price = item.price;
 
-    // ---- TEST SAFE RECIPIENT ----
-    const TO_EMAIL = "olivkassen@gmail.com";
+    // 🔹 Fetch product safely (NO expand)
+    const product = await stripe.products.retrieve(price.product);
+
+    // Interval text (clean)
+    let intervalText = "varje månad";
+    if (price.recurring?.interval === "month") {
+      intervalText =
+        price.recurring.interval_count === 1
+          ? "varje månad"
+          : `var ${price.recurring.interval_count} månad`;
+    }
 
     const variables = {
       name: customer.name || "vän",
-      product_title: productTitle,
+      product_title: product.name,
       price: (price.unit_amount / 100).toFixed(0),
       plan_interval: intervalText,
       renewal_date: new Date(sub.current_period_end * 1000)
@@ -86,9 +68,9 @@ export default async function handler(req, res) {
         "https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/695c27864df0f98b1754712a_olivkassen-logo%402x.png",
     };
 
-    // ---- SEND EMAIL ----
+    // 🔒 TEST SAFE — always send to you
     await sgMail.send({
-      to: TO_EMAIL,
+      to: "olivkassen@gmail.com",
       from: {
         email: "kontakt@olivkassen.com",
         name: "Olivkassen",
@@ -99,12 +81,9 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       ok: true,
-      checked: subscriptions.data.length,
-      eligible: eligibleSubs.length,
-      sent: 1,
       testMode: true,
       sourceCustomer: customer.email,
-      sentTo: TO_EMAIL,
+      sentTo: "olivkassen@gmail.com",
     });
   } catch (err) {
     console.error("RENEWALS ERROR:", err);
