@@ -70,7 +70,7 @@ export default async function handler(req, res) {
 
     // 🔒 TEST SAFE — always send to you
     await sgMail.send({
-      to: "olivkassen@gmail.com",
+      to: "cristina.coloman@gmail.com",
       from: {
         email: "kontakt@olivkassen.com",
         name: "Olivkassen",
@@ -83,7 +83,7 @@ export default async function handler(req, res) {
       ok: true,
       testMode: true,
       sourceCustomer: customer.email,
-      sentTo: "olivkassen@gmail.com",
+      sentTo: "cristina.coloman@gmail.com",
     });
   } catch (err) {
     console.error("RENEWALS ERROR:", err);
