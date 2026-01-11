@@ -7,24 +7,31 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-const TEST_TO_EMAIL = "olivkassen@gmail.com";
+// CONFIG
+const TEST_RECIPIENT = "olivkassen@gmail.com";
 const NOTICE_DAYS = 7;
+const MAX_EMAILS_PER_RUN = 3; // hard abuse guard
 
 export default async function handler(req, res) {
   try {
-    // ---- AUTH ----
+    /* ───────────────────────── AUTH GUARD ───────────────────────── */
     if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
       return res.status(403).json({ error: "Forbidden" });
     }
 
-    const { sourceEmail } = req.body || {};
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Method not allowed" });
+    }
+
+    const { sourceEmail, debug = false } = req.body || {};
+
     if (!sourceEmail) {
       return res.status(400).json({ error: "sourceEmail is required" });
     }
 
-    // ---- FIND CUSTOMER BY EMAIL ----
-    const customers = await stripe.customers.list({
-      email: sourceEmail,
+    /* ───────────────────── FIND CUSTOMER (SAFE) ─────────────────── */
+    const customers = await stripe.customers.search({
+      query: `email:'${sourceEmail}'`,
       limit: 1,
     });
 
@@ -34,76 +41,101 @@ export default async function handler(req, res) {
 
     const customer = customers.data[0];
 
-    // ---- FETCH SUBSCRIPTIONS FOR THIS CUSTOMER ONLY ----
-    const subs = await stripe.subscriptions.list({
+    /* ───────────────── FETCH CUSTOMER SUBSCRIPTIONS ─────────────── */
+    const subscriptions = await stripe.subscriptions.list({
       customer: customer.id,
       status: "active",
-      expand: ["data.items.data.price.product"],
-      limit: 5,
+      expand: ["data.items.data.price"],
     });
 
-    if (!subs.data.length) {
+    if (!subscriptions.data.length) {
       return res.status(200).json({
         ok: true,
         message: "No active subscriptions for customer",
-        testMode: true,
+        customer: debug ? customer : undefined,
       });
     }
 
-    // Pick the active subscription closest to renewal
-    const subscription = subs.data.sort(
-      (a, b) => a.current_period_end - b.current_period_end
-    )[0];
+    let sent = 0;
+    let failed = 0;
+    const debugPayload = [];
 
-    const item = subscription.items.data[0];
-    const price = item.price;
-    const product = price.product;
+    for (const sub of subscriptions.data) {
+      if (sent >= MAX_EMAILS_PER_RUN) break;
 
-    // ---- INTERVAL TEXT ----
-    let intervalText = "återkommande";
-    if (price.recurring?.interval === "month") {
-      intervalText =
-        price.recurring.interval_count === 1
-          ? "varje månad"
-          : `var ${price.recurring.interval_count}:e månad`;
+      const item = sub.items.data[0];
+      const price = item.price;
+
+      if (!price?.recurring) continue;
+
+      /* ───────────── INTERVAL TEXT (svenska) ───────────── */
+      let intervalText = "återkommande";
+      if (price.recurring.interval === "month") {
+        intervalText =
+          price.recurring.interval_count === 1
+            ? "varje månad"
+            : `var ${price.recurring.interval_count}:e månad`;
+      }
+
+      /* ───────────── REAL STRIPE RENEWAL DATE ───────────── */
+      const renewalDate = new Date(sub.current_period_end * 1000);
+      const renewalDateISO = renewalDate.toISOString().split("T")[0];
+
+      /* ───────────── PRODUCT NAME (CLEAN) ───────────── */
+      const productName =
+        price.nickname ||
+        price.product?.name ||
+        "Olivkassen prenumeration";
+
+      const variables = {
+        name: customer.name || "vän",
+        product_title: productName,
+        price: (price.unit_amount / 100).toFixed(0),
+        plan_interval: intervalText,
+        renewal_date: renewalDateISO,
+        portal_url: "https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288",
+        logo_url:
+          "https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/67a38a8645686cca76b775ec_olivkassen-logo.svg",
+      };
+
+      if (debug) {
+        debugPayload.push({
+          customer: customer.email,
+          subscriptionId: sub.id,
+          renewalDate: renewalDateISO,
+          intervalText,
+          productName,
+        });
+      }
+
+      try {
+        await sgMail.send({
+          to: TEST_RECIPIENT, // 🔒 always test inbox
+          from: {
+            email: "kontakt@olivkassen.com",
+            name: "Olivkassen",
+          },
+          templateId: process.env.SENDGRID_TEMPLATE_ID,
+          dynamicTemplateData: variables,
+        });
+
+        sent++;
+      } catch (err) {
+        console.error("SEND FAILED:", err.response?.body || err.message);
+        failed++;
+      }
     }
 
-    // ---- REAL STRIPE RENEWAL DATE ----
-    const renewalDate = new Date(
-      subscription.current_period_end * 1000
-    ).toISOString().split("T")[0];
-
-    // ---- TEMPLATE VARIABLES ----
-    const variables = {
-      name: customer.name || "vän",
-      product_title: product?.name || "Olivkassen prenumeration",
-      price: (price.unit_amount / 100).toFixed(0),
-      plan_interval: intervalText,
-      renewal_date: renewalDate,
-      portal_url: "https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288",
-      logo_url:
-        "https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/695c27864df0f98b1754712a_olivkassen-logo%402x.png",
-    };
-
-    // ---- SEND (TEST SAFE) ----
-    await sgMail.send({
-      to: TEST_TO_EMAIL,
-      from: {
-        email: "kontakt@olivkassen.com",
-        name: "Olivkassen",
-      },
-      templateId: "d-fe01cb7634114535a27600e27d48c5d3",
-      dynamicTemplateData: variables,
-    });
-
+    /* ───────────────────── FINAL RESPONSE ───────────────────── */
     return res.status(200).json({
       ok: true,
       testMode: true,
       sourceCustomer: customer.email,
-      sentTo: TEST_TO_EMAIL,
-      renewalDate,
-      intervalText,
-      product: product?.name,
+      subscriptionsFound: subscriptions.data.length,
+      sent,
+      failed,
+      noticeDays: NOTICE_DAYS,
+      debug: debug ? debugPayload : undefined,
     });
   } catch (err) {
     console.error("RENEWALS ERROR:", err);
