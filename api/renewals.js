@@ -7,13 +7,16 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
-/* ───── CONFIG ───── */
-const TEST_MODE = true; // 🔒 TRUE until production
+/* ================= CONFIG ================= */
+
+const TEST_MODE = true; // 🔒 пока true — письма только тебе
 const TEST_RECIPIENT = "olivkassen@gmail.com";
+
 const NOTICE_DAYS = 7;
 const MAX_EMAILS_PER_RUN = 50;
 
-/* ───── SLACK ───── */
+/* ========================================== */
+
 async function sendSlack(message) {
   if (!process.env.SLACK_WEBHOOK_URL) return;
 
@@ -24,7 +27,6 @@ async function sendSlack(message) {
   });
 }
 
-/* ───── HANDLER ───── */
 export default async function handler(req, res) {
   const startedAt = new Date();
 
@@ -33,8 +35,10 @@ export default async function handler(req, res) {
   let failed = 0;
   let fatalError = null;
 
+  const debugItems = [];
+
   try {
-    /* ───── AUTH GUARD ───── */
+    /* ========= AUTH GUARD ========= */
     if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
       return res.status(403).json({ error: "Forbidden" });
     }
@@ -49,19 +53,16 @@ export default async function handler(req, res) {
     });
 
     for (const sub of subscriptions.data) {
-      /* ───── STRICT RENEWAL WINDOW ───── */
-      if (
-        sub.current_period_end < NOW ||
-        sub.current_period_end > WINDOW_END
-      ) {
-        continue;
-      }
+      /* --- STRICT FILTERS --- */
 
-      /* ───── EXCLUDE PAUSED ───── */
+      // Skip if paused
       if (sub.pause_collection) continue;
 
-      /* ───── EXCLUDE CANCELLED ───── */
-      if (sub.cancel_at_period_end === true) continue;
+      // Skip canceling
+      if (sub.cancel_at_period_end) continue;
+
+      // Must renew within 7 days
+      if (sub.current_period_end > WINDOW_END) continue;
 
       eligible++;
 
@@ -73,25 +74,30 @@ export default async function handler(req, res) {
       const item = sub.items.data[0];
       const price = item.price;
 
-      /* ───── INTERVAL TEXT ───── */
-      let intervalText = "återkommande";
+      /* --- INTERVAL TEXT --- */
+      let intervalText = "subscription";
+
       if (price.recurring?.interval === "month") {
         intervalText =
           price.recurring.interval_count === 1
-            ? "varje månad"
-            : `var ${price.recurring.interval_count}:e månad`;
+            ? "every month"
+            : `every ${price.recurring.interval_count} months`;
       }
 
-      /* ───── RENEWAL DATE ───── */
       const renewalDate = new Date(
         sub.current_period_end * 1000
       ).toISOString().split("T")[0];
 
+      debugItems.push({
+        email: customer.email,
+        product: price.nickname || "Subscription",
+        renewal: renewalDate,
+        interval: intervalText,
+      });
+
       const variables = {
-        name: customer.name || "vän",
-        product_title:
-          price.nickname || "Olivkassen prenumeration",
-        price: (price.unit_amount / 100).toFixed(0),
+        name: customer.name || "there",
+        product_title: price.nickname || "Olivkassen subscription",
         plan_interval: intervalText,
         renewal_date: renewalDate,
         portal_url:
@@ -113,7 +119,7 @@ export default async function handler(req, res) {
 
         sent++;
       } catch (err) {
-        console.error("SEND FAILED:", err.message);
+        console.error("SEND FAILED:", err.response?.body || err.message);
         failed++;
       }
     }
@@ -122,19 +128,32 @@ export default async function handler(req, res) {
     console.error("RENEWALS ERROR:", err);
   }
 
-  /* ───── SLACK REPORT ───── */
-  const dateStr = new Date().toLocaleDateString("sv-SE");
+  /* ================= SLACK REPORT ================= */
+
+  const dateStr = new Date().toISOString().split("T")[0];
 
   let statusLine = "All good";
-  if (fatalError) statusLine = "CRITICAL ERROR – execution stopped";
+
+  if (fatalError) statusLine = "CRITICAL ERROR – execution failed";
   else if (failed > 0) statusLine = "Some emails failed";
   else if (eligible > 0 && sent === 0)
-    statusLine = "Renewals found but no emails sent";
+    statusLine = "Renewals found but none sent";
   else if (eligible === 0)
     statusLine = "No renewals today";
 
+  const details =
+    debugItems.length > 0
+      ? "\n---\n" +
+        debugItems
+          .map(
+            (i) =>
+              `• ${i.email} | ${i.product} | ${i.renewal} | ${i.interval}`
+          )
+          .join("\n")
+      : "";
+
   await sendSlack(`
-Olivkassen – Daily Renewal Report (${TEST_MODE ? "TEST" : "LIVE"})
+Olivkassen – Daily Renewal Report (TEST)
 
 Date: ${dateStr}
 Renewals within ${NOTICE_DAYS} days: ${eligible}
@@ -142,6 +161,7 @@ Emails sent: ${sent}
 Failed: ${failed}
 
 ${statusLine}
+${details}
   `);
 
   if (fatalError) {
@@ -150,9 +170,9 @@ ${statusLine}
 
   return res.status(200).json({
     ok: true,
-    mode: TEST_MODE ? "TEST" : "LIVE",
     eligible,
     sent,
     failed,
+    testMode: TEST_MODE,
   });
 }
