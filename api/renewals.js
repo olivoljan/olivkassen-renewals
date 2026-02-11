@@ -7,12 +7,16 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
 
 sgMail.setApiKey(process.env.SENDGRID_API_KEY);
 
+/* ───── CONFIG ───── */
+const TEST_MODE = true; // 🔒 TRUE until production
 const TEST_RECIPIENT = "olivkassen@gmail.com";
 const NOTICE_DAYS = 7;
-const MAX_EMAILS_PER_RUN = 20;
+const MAX_EMAILS_PER_RUN = 50;
 
+/* ───── SLACK ───── */
 async function sendSlack(message) {
   if (!process.env.SLACK_WEBHOOK_URL) return;
+
   await fetch(process.env.SLACK_WEBHOOK_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -20,10 +24,10 @@ async function sendSlack(message) {
   });
 }
 
+/* ───── HANDLER ───── */
 export default async function handler(req, res) {
   const startedAt = new Date();
 
-  let checked = 0;
   let eligible = 0;
   let sent = 0;
   let failed = 0;
@@ -45,9 +49,20 @@ export default async function handler(req, res) {
     });
 
     for (const sub of subscriptions.data) {
-      checked++;
+      /* ───── STRICT RENEWAL WINDOW ───── */
+      if (
+        sub.current_period_end < NOW ||
+        sub.current_period_end > WINDOW_END
+      ) {
+        continue;
+      }
 
-      if (sub.current_period_end > WINDOW_END) continue;
+      /* ───── EXCLUDE PAUSED ───── */
+      if (sub.pause_collection) continue;
+
+      /* ───── EXCLUDE CANCELLED ───── */
+      if (sub.cancel_at_period_end === true) continue;
+
       eligible++;
 
       if (sent >= MAX_EMAILS_PER_RUN) break;
@@ -58,6 +73,7 @@ export default async function handler(req, res) {
       const item = sub.items.data[0];
       const price = item.price;
 
+      /* ───── INTERVAL TEXT ───── */
       let intervalText = "återkommande";
       if (price.recurring?.interval === "month") {
         intervalText =
@@ -66,6 +82,7 @@ export default async function handler(req, res) {
             : `var ${price.recurring.interval_count}:e månad`;
       }
 
+      /* ───── RENEWAL DATE ───── */
       const renewalDate = new Date(
         sub.current_period_end * 1000
       ).toISOString().split("T")[0];
@@ -85,7 +102,7 @@ export default async function handler(req, res) {
 
       try {
         await sgMail.send({
-          to: TEST_RECIPIENT, // 🔒 test-safe
+          to: TEST_MODE ? TEST_RECIPIENT : customer.email,
           from: {
             email: "kontakt@olivkassen.com",
             name: "Olivkassen",
@@ -105,25 +122,24 @@ export default async function handler(req, res) {
     console.error("RENEWALS ERROR:", err);
   }
 
-  /* ───── SLACK REPORT (ALWAYS) ───── */
+  /* ───── SLACK REPORT ───── */
   const dateStr = new Date().toLocaleDateString("sv-SE");
 
-  let statusLine = "✅ Allt ser bra ut";
-  if (fatalError) statusLine = "🚨 KRITISKT FEL – körningen avbröts";
-  else if (failed > 0) statusLine = "⚠️ Vissa utskick misslyckades";
+  let statusLine = "All good";
+  if (fatalError) statusLine = "CRITICAL ERROR – execution stopped";
+  else if (failed > 0) statusLine = "Some emails failed";
   else if (eligible > 0 && sent === 0)
-    statusLine = "⚠️ Förnyelser hittades men inget skickades";
+    statusLine = "Renewals found but no emails sent";
   else if (eligible === 0)
-    statusLine = "ℹ️ Inga förnyelser idag";
+    statusLine = "No renewals today";
 
   await sendSlack(`
-🫒 *Olivkassen – Daglig förnyelserapport*
+Olivkassen – Daily Renewal Report (${TEST_MODE ? "TEST" : "LIVE"})
 
-📅 Datum: ${dateStr}
-🔍 Kontrollerade abonnemang: ${checked}
-⏰ Förnyelser inom ${NOTICE_DAYS} dagar: ${eligible}
-✅ Skickade mejl: ${sent}
-❌ Misslyckade: ${failed}
+Date: ${dateStr}
+Renewals within ${NOTICE_DAYS} days: ${eligible}
+Emails sent: ${sent}
+Failed: ${failed}
 
 ${statusLine}
   `);
@@ -134,7 +150,7 @@ ${statusLine}
 
   return res.status(200).json({
     ok: true,
-    checked,
+    mode: TEST_MODE ? "TEST" : "LIVE",
     eligible,
     sent,
     failed,
