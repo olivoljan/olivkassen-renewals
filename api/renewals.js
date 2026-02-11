@@ -1,16 +1,18 @@
 import Stripe from "stripe";
+import { Resend } from "resend";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2023-10-16",
 });
 
-const TEST_MODE = true;
-const TEST_RECIPIENT = "olivkassen@gmail.com";
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const NOTICE_DAYS = 7;
+const TARGET_HOUR = 7; // 07:00 local time
 const MAX_EMAILS_PER_RUN = 50;
 
-/* ---------------- SLACK ---------------- */
+const TEST_MODE = true; // 🔒 keep true for now
+const TEST_RECIPIENT = "olivkassen@gmail.com";
 
 async function sendSlack(message) {
   if (!process.env.SLACK_WEBHOOK_URL) return;
@@ -22,48 +24,30 @@ async function sendSlack(message) {
   });
 }
 
-/* -------------- DATE HELPERS -------------- */
-
-// Convert unix timestamp -> Stockholm date string (YYYY-MM-DD)
-function toStockholmDateString(unix) {
-  return new Date(unix * 1000).toLocaleDateString("sv-SE", {
-    timeZone: "Europe/Stockholm",
-  });
-}
-
-// Get today's Stockholm date string
-function todayStockholm() {
-  return new Date().toLocaleDateString("sv-SE", {
-    timeZone: "Europe/Stockholm",
-  });
-}
-
-// Add N days to Stockholm date
-function addDaysStockholm(days) {
+function getTargetWindow() {
   const now = new Date();
-  const stockholmNow = new Date(
-    now.toLocaleString("en-US", { timeZone: "Europe/Stockholm" })
-  );
-  stockholmNow.setDate(stockholmNow.getDate() + days);
 
-  return stockholmNow.toLocaleDateString("sv-SE");
+  const target = new Date();
+  target.setDate(now.getDate() + NOTICE_DAYS);
+  target.setHours(TARGET_HOUR, 0, 0, 0);
+
+  const start = Math.floor(target.getTime() / 1000);
+  const end = start + 86400;
+
+  return { start, end };
 }
-
-/* -------------- MAIN HANDLER -------------- */
 
 export default async function handler(req, res) {
   if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
     return res.status(403).json({ error: "Forbidden" });
   }
 
-  const today = todayStockholm();
-  const targetDate = addDaysStockholm(NOTICE_DAYS);
+  const { start, end } = getTargetWindow();
 
   let eligible = 0;
   let sent = 0;
   let failed = 0;
-
-  const matchedSubscriptions = [];
+  let previewLines = [];
 
   try {
     const subscriptions = await stripe.subscriptions.list({
@@ -73,13 +57,12 @@ export default async function handler(req, res) {
     });
 
     for (const sub of subscriptions.data) {
-      // Skip paused
-      if (sub.pause_collection) continue;
-
-      const renewalDate = toStockholmDateString(sub.current_period_end);
-
-      // EXACT DATE MATCH (calendar based)
-      if (renewalDate !== targetDate) continue;
+      if (
+        sub.current_period_end < start ||
+        sub.current_period_end >= end
+      ) {
+        continue;
+      }
 
       eligible++;
 
@@ -89,61 +72,76 @@ export default async function handler(req, res) {
       const item = sub.items.data[0];
       const price = item.price;
 
-      const intervalText =
-        price.recurring?.interval === "month"
-          ? `every ${price.recurring.interval_count} month(s)`
-          : price.recurring?.interval;
+      const renewalDate = new Date(
+        sub.current_period_end * 1000
+      ).toISOString().split("T")[0];
 
-      matchedSubscriptions.push(
-        `• ${customer.email} | ${price.nickname || "Subscription"} | ${renewalDate} | ${intervalText}`
+      let intervalText = "recurring";
+
+      if (price.recurring?.interval === "month") {
+        intervalText =
+          price.recurring.interval_count === 1
+            ? "every month"
+            : `every ${price.recurring.interval_count} months`;
+      }
+
+      previewLines.push(
+        `• ${customer.email} | ${price.nickname || "Subscription"} | ${renewalDate}`
       );
 
-      if (sent >= MAX_EMAILS_PER_RUN) continue;
+      if (sent >= MAX_EMAILS_PER_RUN) break;
 
       try {
-        // TEST MODE: do not send to real customer
-        if (TEST_MODE) {
-          console.log("TEST MODE — email skipped for:", customer.email);
-        } else {
-          // Email logic will be inserted here (Resend later)
-        }
+        await resend.emails.send({
+          from: "Olivkassen <renewals@olivkassen.com>",
+          to: TEST_MODE ? TEST_RECIPIENT : customer.email,
+          subject:
+            "Din olivoljeabonnemang levereras snart",
+          templateId: process.env.RESEND_TEMPLATE_ID,
+          dynamicTemplateData: {
+            name: customer.name || "vän",
+            product_title:
+              price.nickname || "Olivkassen prenumeration",
+            plan_interval: intervalText,
+            renewal_date: renewalDate,
+            portal_url: process.env.PORTAL_LINK,
+          },
+        });
 
         sent++;
       } catch (err) {
-        console.error("SEND FAILED:", err.message);
+        console.error("RESEND ERROR:", err);
         failed++;
       }
     }
 
-    /* -------- SLACK REPORT -------- */
-
-    let previewBlock =
-      matchedSubscriptions.length > 0
-        ? matchedSubscriptions.join("\n")
-        : "No renewals";
+    const dateStr = new Date().toISOString().split("T")[0];
 
     await sendSlack(`
-🫒 *Olivkassen – Daily Renewal Report (TEST)*
+*Olivkassen – Daily Renewal Report (TEST)*
 
-Date: ${today}
+Date: ${dateStr}
 Renewals exactly in ${NOTICE_DAYS} days: ${eligible}
 Emails sent: ${sent}
 Failed: ${failed}
 
 ---
-${previewBlock}
+${previewLines.length ? previewLines.join("\n") : "No renewals"}
 `);
 
     return res.status(200).json({
       ok: true,
-      targetDate,
       eligible,
       sent,
       failed,
     });
   } catch (err) {
-    console.error("RENEWALS ERROR:", err);
-    await sendSlack("🚨 Renewal function crashed.");
+    console.error("FATAL ERROR:", err);
+
+    await sendSlack(
+      "🚨 Renewal system crashed. Check Vercel logs."
+    );
+
     return res.status(500).json({ error: err.message });
   }
 }
