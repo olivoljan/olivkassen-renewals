@@ -1,21 +1,16 @@
 import Stripe from "stripe";
-import sgMail from "@sendgrid/mail";
+import { Resend } from "resend";
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY, {
   apiVersion: "2023-10-16",
 });
 
-sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-/* ================= CONFIG ================= */
-
-const TEST_MODE = true; // 🔒 пока true — письма только тебе
+const TEST_MODE = true;
 const TEST_RECIPIENT = "olivkassen@gmail.com";
-
 const NOTICE_DAYS = 7;
-const MAX_EMAILS_PER_RUN = 50;
-
-/* ========================================== */
+const MAX_EMAILS_PER_RUN = 20;
 
 async function sendSlack(message) {
   if (!process.env.SLACK_WEBHOOK_URL) return;
@@ -27,25 +22,45 @@ async function sendSlack(message) {
   });
 }
 
+function getTargetWindow() {
+  const now = new Date();
+
+  const today = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate()
+  );
+
+  const targetDate = new Date(today);
+  targetDate.setDate(targetDate.getDate() + NOTICE_DAYS);
+
+  const targetStart = new Date(
+    targetDate.getFullYear(),
+    targetDate.getMonth(),
+    targetDate.getDate(),
+    7,
+    0,
+    0
+  ).getTime() / 1000;
+
+  const targetEnd = targetStart + 24 * 60 * 60;
+
+  return { targetStart, targetEnd };
+}
+
 export default async function handler(req, res) {
-  const startedAt = new Date();
+  if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const { targetStart, targetEnd } = getTargetWindow();
 
   let eligible = 0;
   let sent = 0;
   let failed = 0;
-  let fatalError = null;
-
-  const debugItems = [];
+  const preview = [];
 
   try {
-    /* ========= AUTH GUARD ========= */
-    if (req.headers.authorization !== `Bearer ${process.env.CRON_SECRET}`) {
-      return res.status(403).json({ error: "Forbidden" });
-    }
-
-    const NOW = Math.floor(Date.now() / 1000);
-    const WINDOW_END = NOW + NOTICE_DAYS * 24 * 60 * 60;
-
     const subscriptions = await stripe.subscriptions.list({
       status: "active",
       expand: ["data.customer", "data.items.data.price"],
@@ -53,16 +68,15 @@ export default async function handler(req, res) {
     });
 
     for (const sub of subscriptions.data) {
-      /* --- STRICT FILTERS --- */
-
-      // Skip if paused
+      // Skip paused subscriptions
       if (sub.pause_collection) continue;
 
-      // Skip canceling
-      if (sub.cancel_at_period_end) continue;
-
-      // Must renew within 7 days
-      if (sub.current_period_end > WINDOW_END) continue;
+      if (
+        sub.current_period_end < targetStart ||
+        sub.current_period_end >= targetEnd
+      ) {
+        continue;
+      }
 
       eligible++;
 
@@ -74,9 +88,7 @@ export default async function handler(req, res) {
       const item = sub.items.data[0];
       const price = item.price;
 
-      /* --- INTERVAL TEXT --- */
-      let intervalText = "subscription";
-
+      let intervalText = "recurring";
       if (price.recurring?.interval === "month") {
         intervalText =
           price.recurring.interval_count === 1
@@ -88,85 +100,64 @@ export default async function handler(req, res) {
         sub.current_period_end * 1000
       ).toISOString().split("T")[0];
 
-      debugItems.push({
-        email: customer.email,
-        product: price.nickname || "Subscription",
-        renewal: renewalDate,
-        interval: intervalText,
-      });
-
-      const variables = {
-        name: customer.name || "there",
-        product_title: price.nickname || "Olivkassen subscription",
-        plan_interval: intervalText,
-        renewal_date: renewalDate,
-        portal_url:
-          "https://billing.stripe.com/p/login/8wM9CM1iv93f4tG288",
-        logo_url:
-          "https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/695c27864df0f98b1754712a_olivkassen-logo%402x.png",
-      };
+      preview.push(
+        `• ${customer.email} | ${price.nickname || "Subscription"} | ${renewalDate} | ${intervalText}`
+      );
 
       try {
-        await sgMail.send({
-          to: TEST_MODE ? TEST_RECIPIENT : customer.email,
-          from: {
-            email: "kontakt@olivkassen.com",
-            name: "Olivkassen",
-          },
-          templateId: process.env.SENDGRID_TEMPLATE_ID,
-          dynamicTemplateData: variables,
-        });
+        if (!TEST_MODE) {
+          await resend.emails.send({
+            from: "Olivkassen <kontakt@olivkassen.com>",
+            to: customer.email,
+            subject: "Your upcoming Olivkassen renewal",
+            html: `
+              <p>Hello ${customer.name || "friend"},</p>
+              <p>Your subscription <strong>${price.nickname}</strong> will renew on <strong>${renewalDate}</strong>.</p>
+              <p>If you need to update anything, visit your customer portal.</p>
+              <p>Warm regards,<br/>Olivkassen</p>
+            `,
+          });
+        } else {
+          await resend.emails.send({
+            from: "Olivkassen <kontakt@olivkassen.com>",
+            to: TEST_RECIPIENT,
+            subject: `[TEST] Renewal preview – ${customer.email}`,
+            html: `
+              <p>Customer: ${customer.email}</p>
+              <p>Product: ${price.nickname}</p>
+              <p>Renewal date: ${renewalDate}</p>
+              <p>Interval: ${intervalText}</p>
+            `,
+          });
+        }
 
         sent++;
       } catch (err) {
-        console.error("SEND FAILED:", err.response?.body || err.message);
+        console.error("EMAIL FAILED:", err);
         failed++;
       }
     }
   } catch (err) {
-    fatalError = err;
-    console.error("RENEWALS ERROR:", err);
+    console.error("RENEWAL ERROR:", err);
+    return res.status(500).json({ error: err.message });
   }
-
-  /* ================= SLACK REPORT ================= */
 
   const dateStr = new Date().toISOString().split("T")[0];
 
-  let statusLine = "All good";
-
-  if (fatalError) statusLine = "CRITICAL ERROR – execution failed";
-  else if (failed > 0) statusLine = "Some emails failed";
-  else if (eligible > 0 && sent === 0)
-    statusLine = "Renewals found but none sent";
-  else if (eligible === 0)
-    statusLine = "No renewals today";
-
-  const details =
-    debugItems.length > 0
-      ? "\n---\n" +
-        debugItems
-          .map(
-            (i) =>
-              `• ${i.email} | ${i.product} | ${i.renewal} | ${i.interval}`
-          )
-          .join("\n")
-      : "";
-
-  await sendSlack(`
+  let slackMessage = `
 Olivkassen – Daily Renewal Report (TEST)
 
 Date: ${dateStr}
-Renewals within ${NOTICE_DAYS} days: ${eligible}
+Renewals on target date: ${eligible}
 Emails sent: ${sent}
 Failed: ${failed}
+`;
 
-${statusLine}
-${details}
-  `);
-
-  if (fatalError) {
-    return res.status(500).json({ error: fatalError.message });
+  if (preview.length > 0) {
+    slackMessage += `\n---\n${preview.join("\n")}`;
   }
+
+  await sendSlack(slackMessage);
 
   return res.status(200).json({
     ok: true,
