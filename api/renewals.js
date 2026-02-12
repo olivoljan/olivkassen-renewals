@@ -6,7 +6,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const TEST_MODE = true; // KEEP TRUE during testing
 const TEST_EMAIL = "olivkassen@gmail.com";
-const NOTICE_DAYS = 0; // change to 0 for today testing
+const NOTICE_DAYS = 7; // change to 0 for today testing
 
 const formatDateUTC = (timestamp) =>
   new Date(timestamp * 1000).toISOString().split("T")[0];
@@ -81,14 +81,18 @@ export default async function handler(req, res) {
 
       await resend.emails.send({
         from: "Olivkassen <renewals@olivkassen.com>",
-        to: recipient,
+        to: TEST_MODE ? "olivkassen@gmail.com" : customer.email,
         subject: "Snart dags för nästa leverans",
-        template_id: process.env.RESEND_TEMPLATE_ID,
+        template: "olivkassen-renewal-reminder",
         variables: {
           name: customer.name || "",
-          renewal_date: renewal.invoiceDate,
-        },
+          product_title,
+          plan_interval,
+          renewal_date,
+          portal_url
+        }
       });
+      
 
       slackDetails.push(
         `• ${customer.name || "No name"} (${customer.email}) → ${renewal.invoiceDate}`
