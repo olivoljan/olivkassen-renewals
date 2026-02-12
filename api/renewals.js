@@ -14,7 +14,7 @@ export default async function handler(req, res) {
   try {
     const today = new Date();
     const target = new Date();
-    target.setUTCDate(today.getUTCDate() + 7);
+    target.setUTCDate(today.getUTCDate() + 0);
     const targetDate = target.toISOString().split("T")[0];
 
     let renewals = [];
@@ -45,10 +45,10 @@ export default async function handler(req, res) {
           continue; // no upcoming invoice
         }
 
-        if (!upcoming || !upcoming.next_payment_attempt) continue;
+        if (!upcoming || !upcoming.period_end) continue;
 
-        const invoiceDate = formatDateUTC(upcoming.next_payment_attempt);
-
+        const invoiceDate = formatDateUTC(upcoming.period_end);
+        
         if (invoiceDate === targetDate) {
           renewals.push({
             subscriptionId: sub.id,
