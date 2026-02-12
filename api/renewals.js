@@ -103,7 +103,7 @@ export default async function handler(req, res) {
 
     // Always send Slack report
     await sendSlack(`
-🫒 Olivkassen Renewal Report
+Olivkassen - Daily Renewal Report
 
 Date: ${formatDateUTC(Date.now() / 1000)}
 Target renewal date: ${targetDate}
