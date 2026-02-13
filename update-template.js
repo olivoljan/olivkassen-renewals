@@ -26,19 +26,23 @@ const html = `
 
 <tr>
 <td align="center">
-<img src="https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/695c27864df0f98b1754712a_olivkassen-logo%402x.png"
-width="120" style="margin-bottom:24px;" />
+<img 
+  src="https://cdn.prod.website-files.com/676d596f9615722376dfe2fc/695c27864df0f98b1754712a_olivkassen-logo%402x.png"
+  width="120"
+  style="margin-bottom:24px;"
+/>
 </td>
 </tr>
 
 <tr>
 <td style="font-size:15px;line-height:1.6;color:#000000;">
 
-<p>Hej {{name}},</p>
+<p>Hej {{{name}}},</p>
 
 <p>
 Det är snart dags för nästa leverans i ditt olivoljeabonnemang:
-<strong>{{product_title}}</strong> – levereras <strong>{{plan_interval}}</strong>.
+<strong>{{{product_title}}}</strong> – levereras
+<strong>{{{plan_interval}}}</strong>.
 </p>
 
 <p>
@@ -48,13 +52,15 @@ eller göra andra justeringar i ditt abonnemang gör du det enkelt via vår kund
 </p>
 
 <p>
-👉 <a href="https://olivkassen.com/kundportal" style="color:#000000;text-decoration:none;">
+👉 
+<a href="{{{portal_url}}}" 
+   style="color:#000000;text-decoration:none;">
 <strong>Kundportal</strong>
 </a>
 </p>
 
 <p>
-Nästa leverans sker den <strong>{{renewal_date}}</strong>.
+Nästa leverans sker den <strong>{{{renewal_date}}}</strong>.
 </p>
 
 <p>
@@ -65,7 +71,8 @@ och vi hoppas att den fortsätter att sätta guldkant på dina måltider.
 
 <p>
 Om du har frågor är du välkommen att kontakta oss på
-<a href="mailto:kontakt@olivkassen.com" style="color:#000000;text-decoration:none;">
+<a href="mailto:kontakt@olivkassen.com"
+   style="color:#000000;text-decoration:none;">
 kontakt@olivkassen.com
 </a>
 </p>
@@ -92,7 +99,7 @@ async function updateTemplate() {
   await resend.templates.update(TEMPLATE_ID, {
     name: "Olivkassen Renewal Reminder",
     subject: "Snart dags för nästa leverans",
-    preview: "Ditt olivoljeabonnemang levereras snart – {{{renewal_date}}}",
+    preview: "Ditt olivoljeabonnemang levereras snart",
     html
   });
 

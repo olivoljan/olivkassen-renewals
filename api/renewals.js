@@ -15,18 +15,35 @@ const formatDateISO = (timestamp) =>
   new Date(timestamp * 1000).toISOString().split("T")[0];
 
 /**
- * Format ISO date to human readable format:
- * Example: 2 February 2026
+ * Format ISO date to Swedish readable format
+ * Example: 20 februari 2026
  */
 const formatDateReadable = (isoDate) => {
   const date = new Date(isoDate);
 
-  return date.toLocaleDateString("en-GB", {
+  return date.toLocaleDateString("sv-SE", {
     day: "numeric",
     month: "long",
     year: "numeric",
   });
 };
+
+/**
+ * Idempotency protection:
+ * Prevents sending twice same day for same subscription
+ */
+const alreadySentToday = (subscription, todayISO) => {
+  const lastSent = subscription.metadata?.renewal_notice_sent;
+  return lastSent === todayISO;
+};
+
+async function markAsSent(subscriptionId, todayISO) {
+  await stripe.subscriptions.update(subscriptionId, {
+    metadata: {
+      renewal_notice_sent: todayISO,
+    },
+  });
+}
 
 async function sendSlack(message) {
   if (!process.env.SLACK_WEBHOOK_URL) return;
@@ -41,6 +58,8 @@ async function sendSlack(message) {
 export default async function handler(req, res) {
   try {
     const today = new Date();
+    const todayISO = today.toISOString().split("T")[0];
+
     const targetDateObj = new Date();
     targetDateObj.setUTCDate(today.getUTCDate() + NOTICE_DAYS);
 
@@ -49,7 +68,7 @@ export default async function handler(req, res) {
     let renewals = [];
     let startingAfter = null;
 
-    // Handle pagination safely
+    // Pagination
     while (true) {
       const subscriptions = await stripe.subscriptions.list({
         status: "active",
@@ -60,6 +79,8 @@ export default async function handler(req, res) {
       for (const subscription of subscriptions.data) {
         if (subscription.pause_collection) continue;
         if (subscription.cancel_at_period_end) continue;
+
+        if (alreadySentToday(subscription, todayISO)) continue;
 
         let upcomingInvoice;
 
@@ -95,6 +116,7 @@ export default async function handler(req, res) {
 
     for (const renewal of renewals) {
       const subscription = renewal.subscription;
+
       const customer = await stripe.customers.retrieve(
         renewal.customerId
       );
@@ -105,33 +127,32 @@ export default async function handler(req, res) {
 
       /**
        * Clean product title
-       * Removes everything after dash (–)
-       * Example:
        * "3 liter – var 3:e månad" → "3 liter"
        */
       const rawTitle =
         subscription.items.data[0]?.price?.nickname ||
         "Olivkassen";
 
-      const productTitle = rawTitle.split("–")[0].trim();
+      const productTitle =
+        rawTitle.split("–")[0].trim();
 
       /**
-       * Determine delivery interval
+       * Swedish delivery interval
        */
       const intervalCount =
         subscription.items.data[0]?.price?.recurring
           ?.interval_count || 1;
 
-      let planInterval = "every month";
+      let planInterval = "varje månad";
 
       if (intervalCount === 3)
-        planInterval = "every third month";
+        planInterval = "var tredje månad";
 
       if (intervalCount === 6)
-        planInterval = "every sixth month";
+        planInterval = "var sjätte månad";
 
       /**
-       * Format readable date
+       * Swedish readable date
        */
       const renewalDateReadable =
         formatDateReadable(renewal.invoiceDate);
@@ -140,19 +161,12 @@ export default async function handler(req, res) {
         "https://olivkassen.com/mina-sidor";
 
       const name =
-        customer.name?.trim() || "Valued Customer";
-
-      console.log({
-        name,
-        productTitle,
-        planInterval,
-        renewalDateReadable,
-      });
+        customer.name?.trim() || "Kund";
 
       await resend.emails.send({
         from: "Olivkassen <renewals@olivkassen.com>",
         to: recipient,
-        subject: "Your upcoming delivery reminder",
+        subject: `Snart dags för nästa leverans`,
         template: {
           id: process.env.RESEND_TEMPLATE_ID,
           variables: {
@@ -165,6 +179,8 @@ export default async function handler(req, res) {
         },
       });
 
+      await markAsSent(subscription.id, todayISO);
+
       slackDetails.push(
         `• ${name} (${customer.email}) → ${renewal.invoiceDate}`
       );
@@ -175,7 +191,7 @@ export default async function handler(req, res) {
     await sendSlack(`
 Olivkassen Renewal Report
 
-Date: ${formatDateISO(Math.floor(Date.now() / 1000))}
+Date: ${todayISO}
 Target renewal date: ${targetDate}
 Renewals found: ${renewals.length}
 Emails sent: ${emailsSent}
@@ -189,7 +205,7 @@ ${
 `);
 
     return res.status(200).json({
-      date: formatDateISO(Math.floor(Date.now() / 1000)),
+      date: todayISO,
       target_date: targetDate,
       renewals_found: renewals.length,
       emails_sent: emailsSent,
