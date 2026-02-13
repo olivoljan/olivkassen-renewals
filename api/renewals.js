@@ -155,7 +155,3 @@ ${slackDetails.length ? slackDetails.join("\n") : "No renewals today"}
     return res.status(500).json({ error: "Renewal job failed" });
   }
 }
-
-res.status(200).json({
-  message: "Renewals job completed",
-});
