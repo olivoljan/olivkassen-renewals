@@ -6,13 +6,14 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const TEST_MODE = true; // KEEP TRUE during testing
 const TEST_EMAIL = "olivkassen@gmail.com";
-const NOTICE_DAYS = 7; // change to 0 for today testing
+const NOTICE_DAYS = 7;
 
 const formatDateUTC = (timestamp) =>
   new Date(timestamp * 1000).toISOString().split("T")[0];
 
 async function sendSlack(message) {
   if (!process.env.SLACK_WEBHOOK_URL) return;
+
   await fetch(process.env.SLACK_WEBHOOK_URL, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -59,6 +60,7 @@ export default async function handler(req, res) {
             subscriptionId: sub.id,
             customerId: sub.customer,
             invoiceDate,
+            sub,
           });
         }
       }
@@ -72,27 +74,43 @@ export default async function handler(req, res) {
     let slackDetails = [];
 
     for (const renewal of renewals) {
+      const sub = renewal.sub;
       const customer = await stripe.customers.retrieve(
         renewal.customerId
       );
+
       if (!customer?.email) continue;
 
       const recipient = TEST_MODE ? TEST_EMAIL : customer.email;
 
+      // ----- DYNAMIC VARIABLES -----
+      const product_title =
+        sub.items.data[0]?.price?.nickname || "Olivkassen";
+
+      const intervalCount =
+        sub.items.data[0]?.price?.recurring?.interval_count || 1;
+
+      let plan_interval = "varje månad";
+      if (intervalCount === 3) plan_interval = "var tredje månad";
+      if (intervalCount === 6) plan_interval = "var sjätte månad";
+
+      const renewal_date = renewal.invoiceDate;
+      const portal_url = "https://olivkassen.com/mina-sidor";
+      // --------------------------------
+
       await resend.emails.send({
         from: "Olivkassen <renewals@olivkassen.com>",
-        to: TEST_MODE ? "olivkassen@gmail.com" : customer.email,
+        to: recipient,
         subject: "Snart dags för nästa leverans",
         template: "olivkassen-renewal-reminder",
         variables: {
-          name: customer.name || "",
+          name: customer.name || "Kära kund",
           product_title,
           plan_interval,
           renewal_date,
-          portal_url
-        }
+          portal_url,
+        },
       });
-      
 
       slackDetails.push(
         `• ${customer.name || "No name"} (${customer.email}) → ${renewal.invoiceDate}`
@@ -101,11 +119,10 @@ export default async function handler(req, res) {
       sent++;
     }
 
-    // Always send Slack report
     await sendSlack(`
-Olivkassen - Daily Renewal Report
+Olivkassen Renewal Report
 
-Date: ${formatDateUTC(Date.now() / 1000)}
+Date: ${formatDateUTC(Math.floor(Date.now() / 1000))}
 Target renewal date: ${targetDate}
 Renewals found: ${renewals.length}
 Emails sent: ${sent}
@@ -115,7 +132,7 @@ ${slackDetails.length ? slackDetails.join("\n") : "No renewals today"}
 `);
 
     return res.status(200).json({
-      date: formatDateUTC(Date.now() / 1000),
+      date: formatDateUTC(Math.floor(Date.now() / 1000)),
       target_date: targetDate,
       renewals_found: renewals.length,
       emails_sent: sent,
