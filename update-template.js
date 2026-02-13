@@ -1,7 +1,10 @@
+import 'dotenv/config';
 import { Resend } from "resend";
-import fs from "fs";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+
+import fs from "fs"
 
 const TEMPLATE_ID = "1dd3356f-5762-4af2-b4a6-33ed235e92d1";
 

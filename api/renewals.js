@@ -98,13 +98,21 @@ export default async function handler(req, res) {
       const portal_url = "https://olivkassen.com/mina-sidor";
       // --------------------------------
 
+      console.log({
+        name: customer.name,
+        product_title,
+        plan_interval,
+        renewal_date,
+      });
+      
+
       await resend.emails.send({
         from: "Olivkassen <renewals@olivkassen.com>",
         to: recipient,
         subject: "Snart dags för nästa leverans",
         template: {
-          id: "1dd3356f-5762-4af2-b4a6-33ed235e92d1", // <-- YOUR TEMPLATE ID
-          data: {
+          id: "1dd3356f-5762-4af2-b4a6-33ed235e92d1",
+          variables: {        
             name: customer.name || "Kära kund",
             product_title,
             plan_interval,
@@ -147,3 +155,7 @@ ${slackDetails.length ? slackDetails.join("\n") : "No renewals today"}
     return res.status(500).json({ error: "Renewal job failed" });
   }
 }
+
+res.status(200).json({
+  message: "Renewals job completed",
+});
