@@ -6,7 +6,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const TEST_MODE = true; // KEEP TRUE during testing
 const TEST_EMAIL = "olivkassen@gmail.com";
-const NOTICE_DAYS = 0;
+const NOTICE_DAYS = 7;
 
 const formatDateUTC = (timestamp) =>
   new Date(timestamp * 1000).toISOString().split("T")[0];
