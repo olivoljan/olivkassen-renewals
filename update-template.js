@@ -54,7 +54,7 @@ eller göra andra justeringar i ditt abonnemang gör du det enkelt via vår kund
 <p>
 👉 
 <a href="{{{portal_url}}}" 
-   style="color:#000000;text-decoration:none;">
+   style="color:#000000 !important;text-decoration:none;">
 <strong>Kundportal</strong>
 </a>
 </p>

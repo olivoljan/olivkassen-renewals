@@ -9,13 +9,13 @@ const TEST_EMAIL = "olivkassen@gmail.com";
 const NOTICE_DAYS = 7;
 
 /**
- * Format Stripe timestamp to ISO date (YYYY-MM-DD)
+ * Format Stripe timestamp → YYYY-MM-DD
  */
 const formatDateISO = (timestamp) =>
   new Date(timestamp * 1000).toISOString().split("T")[0];
 
 /**
- * Format ISO date to Swedish readable format
+ * Format ISO date → Swedish readable
  * Example: 20 februari 2026
  */
 const formatDateReadable = (isoDate) => {
@@ -29,8 +29,7 @@ const formatDateReadable = (isoDate) => {
 };
 
 /**
- * Idempotency protection:
- * Prevents sending twice same day for same subscription
+ * Idempotency protection
  */
 const alreadySentToday = (subscription, todayISO) => {
   const lastSent = subscription.metadata?.renewal_notice_sent;
@@ -62,13 +61,14 @@ export default async function handler(req, res) {
 
     const targetDateObj = new Date();
     targetDateObj.setUTCDate(today.getUTCDate() + NOTICE_DAYS);
-
     const targetDate = targetDateObj.toISOString().split("T")[0];
 
     let renewals = [];
     let startingAfter = null;
 
-    // Pagination
+    /**
+     * Pagination through subscriptions
+     */
     while (true) {
       const subscriptions = await stripe.subscriptions.list({
         status: "active",
@@ -79,7 +79,6 @@ export default async function handler(req, res) {
       for (const subscription of subscriptions.data) {
         if (subscription.pause_collection) continue;
         if (subscription.cancel_at_period_end) continue;
-
         if (alreadySentToday(subscription, todayISO)) continue;
 
         let upcomingInvoice;
@@ -126,8 +125,14 @@ export default async function handler(req, res) {
       const recipient = TEST_MODE ? TEST_EMAIL : customer.email;
 
       /**
-       * Clean product title
-       * "3 liter – var 3:e månad" → "3 liter"
+       * First name only
+       */
+      const firstName =
+        customer.name?.split(" ")[0]?.trim() || "Kund";
+
+      /**
+       * Product title cleaning
+       * "1 liter – var 3:e månad" → "1 liter"
        */
       const rawTitle =
         subscription.items.data[0]?.price?.nickname ||
@@ -137,7 +142,7 @@ export default async function handler(req, res) {
         rawTitle.split("–")[0].trim();
 
       /**
-       * Swedish delivery interval
+       * Swedish interval text
        */
       const intervalCount =
         subscription.items.data[0]?.price?.recurring
@@ -152,7 +157,7 @@ export default async function handler(req, res) {
         planInterval = "var sjätte månad";
 
       /**
-       * Swedish readable date
+       * Swedish readable renewal date
        */
       const renewalDateReadable =
         formatDateReadable(renewal.invoiceDate);
@@ -160,17 +165,14 @@ export default async function handler(req, res) {
       const portalUrl =
         "https://olivkassen.com/mina-sidor";
 
-      const name =
-        customer.name?.trim() || "Kund";
-
       await resend.emails.send({
         from: "Olivkassen <renewals@olivkassen.com>",
         to: recipient,
-        subject: `Snart dags för nästa leverans`,
+        subject: "Snart dags för nästa leverans",
         template: {
           id: process.env.RESEND_TEMPLATE_ID,
           variables: {
-            name,
+            name: firstName,
             product_title: productTitle,
             plan_interval: planInterval,
             renewal_date: renewalDateReadable,
@@ -182,7 +184,7 @@ export default async function handler(req, res) {
       await markAsSent(subscription.id, todayISO);
 
       slackDetails.push(
-        `• ${name} (${customer.email}) → ${renewal.invoiceDate}`
+        `• ${firstName} (${customer.email}) → ${renewal.invoiceDate}`
       );
 
       emailsSent++;
