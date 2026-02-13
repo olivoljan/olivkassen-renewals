@@ -102,15 +102,17 @@ export default async function handler(req, res) {
         from: "Olivkassen <renewals@olivkassen.com>",
         to: recipient,
         subject: "Snart dags för nästa leverans",
-        template: "olivkassen-renewal-reminder",
-        variables: {
-          name: customer.name || "Kära kund",
-          product_title,
-          plan_interval,
-          renewal_date,
-          portal_url,
+        template: {
+          alias: "olivkassen-renewal-reminder",
+          data: {
+            name: customer.name || "Kära kund",
+            product_title,
+            plan_interval,
+            renewal_date,
+            portal_url,
+          },
         },
-      });
+      });      
 
       slackDetails.push(
         `• ${customer.name || "No name"} (${customer.email}) → ${renewal.invoiceDate}`
