@@ -6,7 +6,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const TEST_MODE = true;
 const TEST_EMAIL = "olivkassen@gmail.com";
-const NOTICE_DAYS = 1;
+const NOTICE_DAYS = 7;
 
 /**
  * Format Stripe timestamp → YYYY-MM-DD
