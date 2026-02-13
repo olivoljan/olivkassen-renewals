@@ -6,7 +6,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 
 const TEST_MODE = true; // KEEP TRUE during testing
 const TEST_EMAIL = "olivkassen@gmail.com";
-const NOTICE_DAYS = 7;
+const NOTICE_DAYS = 0;
 
 const formatDateUTC = (timestamp) =>
   new Date(timestamp * 1000).toISOString().split("T")[0];
@@ -103,7 +103,7 @@ export default async function handler(req, res) {
         to: recipient,
         subject: "Snart dags för nästa leverans",
         template: {
-          alias: "olivkassen-renewal-reminder",
+          id: "1dd3356f-5762-4af2-b4a6-33ed235e92d1", // <-- YOUR TEMPLATE ID
           data: {
             name: customer.name || "Kära kund",
             product_title,
@@ -112,7 +112,8 @@ export default async function handler(req, res) {
             portal_url,
           },
         },
-      });      
+      });
+            
 
       slackDetails.push(
         `• ${customer.name || "No name"} (${customer.email}) → ${renewal.invoiceDate}`
