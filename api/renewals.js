@@ -4,105 +4,112 @@ import { Resend } from "resend";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const TEST_MODE = true; // ✅ KEEP TRUE UNTIL LIVE
+const TEST_MODE = true; // 🔒 SAFE MODE
 
-function formatSwedishDate(dateString) {
-  const date = new Date(dateString);
-  return new Intl.DateTimeFormat("sv-SE", {
+function formatDateSwedish(dateString) {
+  return new Date(dateString).toLocaleDateString("sv-SE", {
     day: "numeric",
     month: "long",
     year: "numeric",
-  }).format(date);
+  });
 }
 
-function getFirstName(fullName) {
-  if (!fullName) return "Kund";
+function cleanFirstName(fullName) {
+  if (!fullName) return "kund";
   return fullName.trim().split(" ")[0];
 }
 
-function extractLiters(productName) {
-  if (!productName) return "";
-  const match = productName.match(/\d+/);
-  return match ? `${match[0]} liter` : productName;
+function extractLiters(title) {
+  const match = title?.match(/(\d+)\s*l/i);
+  return match ? `${match[1]} liter` : title;
+}
+
+function translateInterval(intervalCount) {
+  if (intervalCount === 1) return "varje månad";
+  if (intervalCount === 3) return "var tredje månad";
+  if (intervalCount === 6) return "var sjätte månad";
+  return "enligt ditt valda intervall";
 }
 
 export default async function handler(req, res) {
   try {
     const today = new Date();
-    const targetDate = new Date(today);
-    targetDate.setDate(today.getDate() + 7);
+    const targetDate = new Date();
+    targetDate.setDate(today.getDate() + 1);
 
     const targetDateISO = targetDate.toISOString().split("T")[0];
-
-    let renewalsFound = 0;
-    let emailsSent = 0;
-    const slackDetails = [];
 
     const subscriptions = await stripe.subscriptions.list({
       status: "active",
       limit: 100,
-      expand: ["data.customer", "data.items.data.price"], // ✅ SAFE EXPAND
+      expand: [
+        "data.customer",
+        "data.items.data.price"
+      ],
     });
 
-    for (const sub of subscriptions.data) {
-      const renewalDate = new Date(sub.current_period_end * 1000);
-      const renewalISO = renewalDate.toISOString().split("T")[0];
+    let renewalsFound = 0;
+    let emailsSent = 0;
+    let slackDetails = [];
 
-      if (renewalISO !== targetDateISO) continue;
+    for (const sub of subscriptions.data) {
+      const renewalDate = new Date(sub.current_period_end * 1000)
+        .toISOString()
+        .split("T")[0];
+
+      if (renewalDate !== targetDateISO) continue;
 
       renewalsFound++;
 
       const customer = sub.customer;
-      const firstName = getFirstName(customer?.name);
-      const recipient = TEST_MODE
-        ? "olivkassen@gmail.com"
-        : customer?.email;
-
-      if (!recipient) continue;
+      const email = customer.email;
+      const firstName = cleanFirstName(customer.name);
 
       const price = sub.items.data[0].price;
+      const intervalCount = price.recurring?.interval_count || 1;
 
-      // ✅ SAFE PRODUCT FETCH (NO DEEP EXPAND)
-      const product =
-        typeof price.product === "string"
-          ? await stripe.products.retrieve(price.product)
-          : price.product;
+      const productTitleRaw =
+        typeof price.product === "object"
+          ? price.product.name
+          : price.nickname || "Olivolja";
 
-      const rawTitle = product?.name || "";
-      const productTitle = extractLiters(rawTitle);
+      const productTitle = extractLiters(productTitleRaw);
+      const planInterval = translateInterval(intervalCount);
+      const formattedDate = formatDateSwedish(renewalDate);
 
-      const formattedDate = formatSwedishDate(renewalDate);
+      // 🔒 Idempotency key (unique per subscription + date)
+      const idempotencyKey = `${sub.id}-${renewalDate}`;
 
-      const idempotencyKey = `renewal-${sub.id}-${targetDateISO}`;
-
-      await resend.emails.send(
-        {
-          from: "Olivkassen <renewals@olivkassen.com>",
-          to: recipient,
-          subject: "Snart dags för nästa leverans",
-          template: {
-            id: process.env.RESEND_TEMPLATE_ID,
-            variables: {
-              name: firstName,
-              product_title: productTitle,
-              renewal_date: formattedDate,
-              portal_url: process.env.PORTAL_LINK,
+      if (TEST_MODE) {
+        await resend.emails.send(
+          {
+            from: "Olivkassen <renewals@olivkassen.com>",
+            to: "olivkassen@gmail.com", // safe test inbox
+            subject: "Snart dags för nästa leverans",
+            template: {
+              id: process.env.RESEND_TEMPLATE_ID,
+              variables: {
+                name: firstName,
+                product_title: productTitle,
+                plan_interval: planInterval,
+                renewal_date: formattedDate,
+              },
             },
           },
-        },
-        {
-          idempotencyKey,
-        }
-      );
+          {
+            idempotencyKey,
+          }
+        );
 
-      emailsSent++;
+        emailsSent++;
+      }
 
       slackDetails.push(
-        `• ${customer?.name || "No name"} (${customer?.email}) → ${renewalISO}`
+        `• ${customer.name} (${email}) → ${renewalDate}`
       );
     }
 
-    // Slack report
+    // ✅ SLACK RESTORED EXACTLY LIKE BEFORE
     await fetch(process.env.SLACK_WEBHOOK_URL, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -115,19 +122,20 @@ Renewals found: ${renewalsFound}
 Emails sent: ${emailsSent}
 Test mode: ${TEST_MODE ? "YES" : "NO"}
 
-${slackDetails.length ? slackDetails.join("\n") : "No renewals today"}
+${slackDetails.length > 0 ? slackDetails.join("\n") : "No renewals today"}
 `,
       }),
     });
 
     return res.status(200).json({
-      success: true,
-      renewalsFound,
-      emailsSent,
-      testMode: TEST_MODE,
+      date: today.toISOString().split("T")[0],
+      target_date: targetDateISO,
+      renewals_found: renewalsFound,
+      emails_sent: emailsSent,
+      test_mode: TEST_MODE,
     });
   } catch (error) {
-    console.error(error);
+    console.error("Renewal error:", error);
     return res.status(500).json({ error: error.message });
   }
 }

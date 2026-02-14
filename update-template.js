@@ -19,7 +19,7 @@ const html = `
 <tr>
 <td align="center">
 
-<table width="100%" style="max-width:520px;background:#ffffff;border-radius:16px;padding:32px;">
+<table width="100%" style="max-width:600px;background:#ffffff;border-radius:16px;padding:32px;">
 
 <tr>
 <td align="center" style="padding-bottom:24px;">
