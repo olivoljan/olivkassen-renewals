@@ -4,169 +4,95 @@ import { Resend } from "resend";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY);
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const TEST_MODE = true;
-const TEST_EMAIL = "olivkassen@gmail.com";
-const NOTICE_DAYS = 7;
-
-/**
- * Format Stripe timestamp → YYYY-MM-DD
- */
-const formatDateISO = (timestamp) =>
-  new Date(timestamp * 1000).toISOString().split("T")[0];
-
-/**
- * Format ISO date → Swedish readable
- * Example: 20 februari 2026
- */
-const formatDateReadable = (isoDate) => {
-  const date = new Date(isoDate);
-
-  return date.toLocaleDateString("sv-SE", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-};
-
-/**
- * Idempotency protection
- */
-const alreadySentToday = (subscription, todayISO) => {
-  const lastSent = subscription.metadata?.renewal_notice_sent;
-  return lastSent === todayISO;
-};
-
-async function markAsSent(subscriptionId, todayISO) {
-  await stripe.subscriptions.update(subscriptionId, {
-    metadata: {
-      renewal_notice_sent: todayISO,
-    },
-  });
-}
-
-async function sendSlack(message) {
-  if (!process.env.SLACK_WEBHOOK_URL) return;
-
-  await fetch(process.env.SLACK_WEBHOOK_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text: message }),
-  });
-}
-
 export default async function handler(req, res) {
   try {
     const today = new Date();
     const todayISO = today.toISOString().split("T")[0];
 
-    const targetDateObj = new Date();
-    targetDateObj.setUTCDate(today.getUTCDate() + NOTICE_DAYS);
-    const targetDate = targetDateObj.toISOString().split("T")[0];
+    const testMode = process.env.TEST_MODE === "true";
 
     let renewals = [];
-    let startingAfter = null;
+    let emailsSent = 0;
 
-    /**
-     * Pagination through subscriptions
-     */
-    while (true) {
-      const subscriptions = await stripe.subscriptions.list({
-        status: "active",
-        limit: 100,
-        starting_after: startingAfter || undefined,
-      });
+    const subscriptions = await stripe.subscriptions.list({
+      status: "active",
+      limit: 100,
+      expand: ["data.customer", "data.items.data.price.product"],
+    });
 
-      for (const subscription of subscriptions.data) {
-        if (subscription.pause_collection) continue;
-        if (subscription.cancel_at_period_end) continue;
-        if (alreadySentToday(subscription, todayISO)) continue;
+    for (const sub of subscriptions.data) {
+      const renewalDate = new Date(sub.current_period_end * 1000);
+      const renewalISO = renewalDate.toISOString().split("T")[0];
 
-        let upcomingInvoice;
+      if (renewalISO !== todayISO) continue;
 
-        try {
-          upcomingInvoice = await stripe.invoices.retrieveUpcoming({
-            subscription: subscription.id,
-          });
-        } catch {
-          continue;
-        }
+      const customer = sub.customer;
 
-        if (!upcomingInvoice?.period_end) continue;
+      // -------------------------
+      // FORCE CLEAN FIRST NAME
+      // -------------------------
+      const firstNameRaw = customer.name || "";
+      const firstName =
+        firstNameRaw
+          .trim()
+          .split(/\s+/)[0]
+          .replace(/\s/g, "") || "Kund";
 
-        const invoiceDate = formatDateISO(upcomingInvoice.period_end);
+      // -------------------------
+      // CLEAN PRODUCT TITLE
+      // -------------------------
+      const rawTitle =
+        sub.items.data[0].price.product.name || "";
 
-        if (invoiceDate === targetDate) {
-          renewals.push({
-            subscription,
-            customerId: subscription.customer,
-            invoiceDate,
-          });
-        }
+      const productTitle = rawTitle
+        .split(/[-–—]/)[0]
+        .trim();
+
+      // -------------------------
+      // PLAN INTERVAL (SWEDISH)
+      // -------------------------
+      const intervalCount =
+        sub.items.data[0].price.recurring.interval_count;
+
+      let planInterval = "";
+      if (intervalCount === 1) {
+        planInterval = "varje månad";
+      } else if (intervalCount === 3) {
+        planInterval = "var tredje månad";
+      } else if (intervalCount === 6) {
+        planInterval = "var sjätte månad";
+      } else {
+        planInterval = `var ${intervalCount}:e månad`;
       }
 
-      if (!subscriptions.has_more) break;
-
-      startingAfter =
-        subscriptions.data[subscriptions.data.length - 1].id;
-    }
-
-    let emailsSent = 0;
-    let slackDetails = [];
-
-    for (const renewal of renewals) {
-      const subscription = renewal.subscription;
-
-      const customer = await stripe.customers.retrieve(
-        renewal.customerId
-      );
-
-      if (!customer?.email) continue;
-
-      const recipient = TEST_MODE ? TEST_EMAIL : customer.email;
-
-      /**
-       * First name only
-       */
-      const firstName =
-        customer.name?.split(" ")[0]?.trim() || "Kund";
-
-      /**
-       * Product title cleaning
-       * "1 liter – var 3:e månad" → "1 liter"
-       */
-      const rawTitle =
-        subscription.items.data[0]?.price?.nickname ||
-        "Olivkassen";
-
-      const productTitle =
-        rawTitle.split("–")[0].trim();
-
-      /**
-       * Swedish interval text
-       */
-      const intervalCount =
-        subscription.items.data[0]?.price?.recurring
-          ?.interval_count || 1;
-
-      let planInterval = "varje månad";
-
-      if (intervalCount === 3)
-        planInterval = "var tredje månad";
-
-      if (intervalCount === 6)
-        planInterval = "var sjätte månad";
-
-      /**
-       * Swedish readable renewal date
-       */
+      // -------------------------
+      // SWEDISH DATE FORMAT
+      // -------------------------
       const renewalDateReadable =
-        formatDateReadable(renewal.invoiceDate);
+        renewalDate.toLocaleDateString("sv-SE", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        });
 
-      const portalUrl =
-        "https://olivkassen.com/mina-sidor";
+      // -------------------------
+      // IDEMPOTENCY PROTECTION
+      // -------------------------
+      const metadataKey = `renewal_email_${todayISO}`;
+
+      if (sub.metadata?.[metadataKey]) {
+        continue; // already sent today
+      }
+
+      // -------------------------
+      // SEND EMAIL
+      // -------------------------
+      const recipient = testMode
+        ? process.env.TEST_EMAIL
+        : customer.email;
 
       await resend.emails.send({
-        from: "Olivkassen <renewals@olivkassen.com>",
+        from: process.env.FROM_EMAIL,
         to: recipient,
         subject: "Snart dags för nästa leverans",
         template: {
@@ -176,52 +102,32 @@ export default async function handler(req, res) {
             product_title: productTitle,
             plan_interval: planInterval,
             renewal_date: renewalDateReadable,
-            portal_url: portalUrl,
+            portal_url: process.env.PORTAL_LINK,
           },
         },
       });
 
-      await markAsSent(subscription.id, todayISO);
-
-      slackDetails.push(
-        `• ${firstName} (${customer.email}) → ${renewal.invoiceDate}`
-      );
-
       emailsSent++;
+      renewals.push(`${firstName} (${customer.email})`);
+
+      // Mark as sent
+      await stripe.subscriptions.update(sub.id, {
+        metadata: {
+          ...sub.metadata,
+          [metadataKey]: "sent",
+        },
+      });
     }
-
-    await sendSlack(`
-Olivkassen Renewal Report
-
-Date: ${todayISO}
-Target renewal date: ${targetDate}
-Renewals found: ${renewals.length}
-Emails sent: ${emailsSent}
-Test mode: ${TEST_MODE ? "YES" : "NO"}
-
-${
-  slackDetails.length
-    ? slackDetails.join("\n")
-    : "No renewals today"
-}
-`);
 
     return res.status(200).json({
       date: todayISO,
-      target_date: targetDate,
       renewals_found: renewals.length,
       emails_sent: emailsSent,
-      test_mode: TEST_MODE,
+      test_mode: testMode,
+      renewals,
     });
   } catch (error) {
-    console.error("RENEWAL ERROR:", error);
-
-    await sendSlack(
-      `🚨 Renewal job crashed: ${error.message}`
-    );
-
-    return res.status(500).json({
-      error: "Renewal job failed",
-    });
+    console.error(error);
+    return res.status(500).json({ error: error.message });
   }
 }
