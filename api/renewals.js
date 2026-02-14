@@ -35,7 +35,7 @@ export default async function handler(req, res) {
   try {
     const today = new Date();
     const targetDate = new Date();
-    targetDate.setDate(today.getDate() + 7);
+    targetDate.setDate(today.getDate() + 1);
 
     const targetDateISO = targetDate.toISOString().split("T")[0];
 
