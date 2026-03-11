@@ -7,7 +7,7 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 /*
 PRODUCTION CONTROLS
 */
-const TEST_MODE = true;        // true = send to test inbox only
+const TEST_MODE = false;        // true = send to test inbox only
 const DRY_RUN = false;          // true = no emails sent at all
 const MAX_EMAILS_PER_RUN = 25;  // safety cap
 
