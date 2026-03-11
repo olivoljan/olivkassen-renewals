@@ -72,7 +72,7 @@ Om du har frågor eller behöver hjälp är du välkommen att kontakta oss på
 
 <p>
 Varma hälsningar,<br>
-<strong>Olivkassen</strong>
+Olivkassen
 </p>
 
 </td>
