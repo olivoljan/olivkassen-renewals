@@ -44,15 +44,6 @@ export default async function handler(req, res) {
 
     const targetDateISO = targetDate.toISOString().split("T")[0];
 
-    const subscriptions = await stripe.subscriptions.list({
-      status: "active",
-      limit: 100,
-      expand: [
-        "data.customer",
-        "data.items.data.price",
-      ]
-    });
-
     let renewalsFound = 0;
     let emailsSent = 0;
     let slackDetails = [];
@@ -88,7 +79,7 @@ export default async function handler(req, res) {
         /*
         DUPLICATE PROTECTION USING STRIPE METADATA
         */
-        if (sub.metadata?.renewal_reminder_sent === renewalDateISO) {
+        if (sub.metadata?.renewal_reminder_sent_v2 === renewalDateISO) {
           slackDetails.push(
             `• ${sub.customer.email} → already sent`
           );
@@ -150,7 +141,7 @@ export default async function handler(req, res) {
           await stripe.subscriptions.update(sub.id, {
             metadata: {
               ...sub.metadata,
-              renewal_reminder_sent: renewalDateISO,
+              renewal_reminder_sent_v2: renewalDateISO,
             },
           });
 
