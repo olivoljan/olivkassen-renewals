@@ -9,7 +9,7 @@ PRODUCTION CONTROLS
 */
 const TEST_MODE = false;        // true = send to test inbox only
 const DRY_RUN = false;          // true = no emails sent at all
-const MAX_EMAILS_PER_RUN = 25;  // safety cap
+const MAX_EMAILS_PER_RUN = 100;  // safety cap
 
 function formatDateSwedish(dateString) {
   return new Date(dateString).toLocaleDateString("sv-SE", {
@@ -68,6 +68,10 @@ export default async function handler(req, res) {
         const renewalDate = new Date(sub.current_period_end * 1000);
         const renewalDateISO = renewalDate.toISOString().split("T")[0];
 
+        if (sub.cancel_at_period_end) continue;
+        if (sub.status === "paused") continue;
+        if (sub.pause_collection) continue;
+
         const diffDays = Math.floor(
           (renewalDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
@@ -109,7 +113,7 @@ export default async function handler(req, res) {
         const planInterval = translateInterval(intervalCount);
         const formattedDate = formatDateSwedish(renewalDateISO);
 
-        const idempotencyKey = `${sub.id}-${renewalDateISO}-resend-20260311`;
+        const idempotencyKey = `${sub.id}-${renewalDateISO}`;
 
         const recipientEmail = TEST_MODE
           ? "olivkassen@gmail.com"
