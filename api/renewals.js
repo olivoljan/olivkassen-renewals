@@ -65,7 +65,7 @@ export default async function handler(req, res) {
       const page = await stripe.subscriptions.list({
         status: "active",
         limit: 100,
-        starting_after: startingAfter,
+        ...(startingAfter && { starting_after: startingAfter }),
         expand: [
           "data.customer",
           "data.items.data.price",
