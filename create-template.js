@@ -3,7 +3,7 @@ import { Resend } from "resend";
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-const TEMPLATE_ID = process.env.RESEND_TEMPLATE_ID;
+const TEMPLATE_ID = "ce41d415-aadc-47ba-b57e-2d35a74af430";
 
 const html = `
 <!DOCTYPE html>
@@ -35,8 +35,8 @@ width="120" style="display:block;">
 
 <p>
 Det är snart dags för nästa leverans i ditt olivoljeabonnemang:
-<strong>{{{product_title}}}</strong> – levereras
-<strong>{{{plan_interval}}}</strong>.
+<strong>{{{product_title}}}</strong>
+<strong> – levereras {{{plan_interval}}}</strong>.
 </p>
 
 <p>
@@ -46,11 +46,12 @@ eller göra andra justeringar i ditt abonnemang gör du det enkelt via vår kund
 </p>
 
 <p>
-👉
-<a href="{{{portal_url}}}" style="text-decoration:none;">
-<span style="color:#000000 !important;">
-<strong>Kundportal</strong>
-</span>
+👉 
+<a href="{{{portal_url}}}" 
+   style="color:#000000 !important; text-decoration:none !important;">
+  <span style="color:#000000 !important; font-weight:bold;">
+    Kundportal
+  </span>
 </a>
 </p>
 
@@ -62,6 +63,16 @@ Nästa leverans sker den <strong>{{{renewal_date}}}</strong>.
 Tack för att du låter oss vara en del av din matlagning.
 Det betyder mycket för oss att få leverera vår olivolja till dig och
 vi hoppas att den fortsätter att sätta guldkant på dina måltider.
+</p>
+
+<p>
+Om du har frågor eller behöver hjälp är du välkommen att kontakta oss på
+<strong>kontakt@olivkassen.com</strong>
+</p>
+
+<p>
+Varma hälsningar,<br>
+<strong>Olivkassen</strong>
 </p>
 
 </td>
@@ -77,12 +88,37 @@ vi hoppas att den fortsätter att sätta guldkant på dina måltider.
 </html>
 `;
 
+const text = `
+Hej {{{name}}},
+
+Det är snart dags för nästa leverans i ditt olivoljeabonnemang: {{{product_title}}} – levereras {{{plan_interval}}}.
+
+Paketet skickas till ditt närmaste DHL- eller Schenker-ombud. 
+Om du vill uppdatera dina betalningsuppgifter, ändra leveransintervall eller göra andra justeringar i ditt abonnemang gör du det enkelt via vår kundportal: {{{portal_url}}}
+
+Nästa leverans sker den {{{renewal_date}}}.
+
+Tack för att du låter oss vara en del av din matlagning.
+
+Om du har frågor eller behöver hjälp är du välkommen att kontakta oss på kontakt@olivkassen.com
+
+Varma hälsningar,
+Olivkassen
+`;
+
 async function updateTemplate() {
-  const response = await resend.templates.update(TEMPLATE_ID, {
+  await resend.templates.update(TEMPLATE_ID, {
+    name: "Olivkassen Renewal Reminder NEW",
+    subject: "Snart dags för nästa leverans",
+    preview: "Din nästa leverans närmar sig",
+    from: "Olivkassen <renewals@olivkassen.com>",
     html,
+    text,
   });
 
-  console.log("Template updated successfully");
+  await resend.templates.publish(TEMPLATE_ID);
+
+  console.log("Template updated and published");
 }
 
 updateTemplate();
