@@ -79,7 +79,7 @@ export default async function handler(req, res) {
         /*
         DUPLICATE PROTECTION USING STRIPE METADATA
         */
-        if (sub.metadata?.renewal_reminder_sent_v2 === renewalDateISO) {
+        if (sub.metadata?.renewal_reminder_sent_v3 === renewalDateISO) {
           slackDetails.push(
             `• ${sub.customer.email} → already sent`
           );
@@ -138,12 +138,14 @@ export default async function handler(req, res) {
           /*
           MARK AS SENT IN STRIPE METADATA
           */
-          await stripe.subscriptions.update(sub.id, {
-            metadata: {
-              ...sub.metadata,
-              renewal_reminder_sent_v2: renewalDateISO,
-            },
-          });
+          if (!TEST_MODE) {
+            await stripe.subscriptions.update(sub.id, {
+              metadata: {
+                ...sub.metadata,
+                renewal_reminder_sent_v3: renewalDateISO,
+              },
+            });
+          }
 
           emailsSent++;
         }
