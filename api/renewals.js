@@ -44,11 +44,7 @@ export default async function handler(req, res) {
 
     const targetDateISO = targetDate.toISOString().split("T")[0];
 
-    let renewalsFound = 0;
-    let emailsSent = 0;
-    let slackDetails = [];
-
-    for await (const sub of stripe.subscriptions.list({
+    const subscriptions = await stripe.subscriptions.list({
       status: "active",
       limit: 100,
       expand: [
@@ -56,94 +52,123 @@ export default async function handler(req, res) {
         "data.items.data.price",
         "data.items.data.price.product"
       ]
-    }).autoPagingIterable()) {
+    });
 
-      const renewalDate = new Date(sub.current_period_end * 1000);
-      const renewalDateISO = renewalDate.toISOString().split("T")[0];
+    let renewalsFound = 0;
+    let emailsSent = 0;
+    let slackDetails = [];
 
-      const diffDays = Math.floor(
-        (renewalDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
-      );
+    let hasMore = true;
+    let startingAfter = null;
 
-      if (diffDays < 6 || diffDays > 7) continue;
+    while (hasMore) {
 
-      renewalsFound++;
+      const page = await stripe.subscriptions.list({
+        status: "active",
+        limit: 100,
+        starting_after: startingAfter,
+        expand: [
+          "data.customer",
+          "data.items.data.price",
+          "data.items.data.price.product"
+        ]
+      });
 
-      /*
-      DUPLICATE PROTECTION USING STRIPE METADATA
-      */
-      if (sub.metadata?.renewal_reminder_sent === renewalDateISO) {
-        slackDetails.push(
-          `• ${sub.customer.email} → already sent`
+      for (const sub of page.data) {
+
+        const renewalDate = new Date(sub.current_period_end * 1000);
+        const renewalDateISO = renewalDate.toISOString().split("T")[0];
+
+        const diffDays = Math.floor(
+          (renewalDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
         );
-        continue;
-      }
 
-      /*
-      SAFETY CAP
-      */
-      if (emailsSent >= MAX_EMAILS_PER_RUN) {
-        throw new Error("Safety stop triggered: max emails reached");
-      }
+        if (diffDays < 6 || diffDays > 7) continue;
 
-      const customer = sub.customer;
-      const email = customer.email;
-      const firstName = cleanFirstName(customer.name);
-
-      const price = sub.items.data[0].price;
-      const intervalCount = price.recurring?.interval_count || 1;
-
-      const productTitleRaw =
-        typeof price.product === "object"
-          ? price.product.name
-          : price.nickname || "Olivolja";
-
-      const productTitle = extractLiters(productTitleRaw);
-      const planInterval = translateInterval(intervalCount);
-      const formattedDate = formatDateSwedish(renewalDateISO);
-
-      const idempotencyKey = `${sub.id}-${renewalDateISO}`;
-
-      const recipientEmail = TEST_MODE
-        ? "olivkassen@gmail.com"
-        : email;
-
-      if (!DRY_RUN) {
-        await resend.emails.send(
-          {
-            from: "Olivkassen <renewals@olivkassen.com>",
-            to: recipientEmail,
-            subject: "Snart dags för nästa leverans",
-            template: {
-              id: process.env.RESEND_TEMPLATE_ID,
-              variables: {
-                name: firstName,
-                product_title: productTitle,
-                plan_interval: planInterval,
-                renewal_date: formattedDate,
-                portal_url: process.env.PORTAL_URL,
-              },
-            },
-          },
-          { idempotencyKey }
-        );
+        renewalsFound++;
 
         /*
-        MARK AS SENT IN STRIPE METADATA
+        DUPLICATE PROTECTION USING STRIPE METADATA
         */
-        await stripe.subscriptions.update(sub.id, {
-          metadata: {
-            ...sub.metadata,
-            renewal_reminder_sent: renewalDateISO,
-          },
-        });
+        if (sub.metadata?.renewal_reminder_sent === renewalDateISO) {
+          slackDetails.push(
+            `• ${sub.customer.email} → already sent`
+          );
+          continue;
+        }
 
-        emailsSent++;
+        /*
+        SAFETY CAP
+        */
+        if (emailsSent >= MAX_EMAILS_PER_RUN) {
+          throw new Error("Safety stop triggered: max emails reached");
+        }
+
+        const customer = sub.customer;
+        const email = customer.email;
+        const firstName = cleanFirstName(customer.name);
+
+        const price = sub.items.data[0].price;
+        const intervalCount = price.recurring?.interval_count || 1;
+
+        const productTitleRaw =
+          typeof price.product === "object"
+            ? price.product.name
+            : price.nickname || "Olivolja";
+
+        const productTitle = extractLiters(productTitleRaw);
+        const planInterval = translateInterval(intervalCount);
+        const formattedDate = formatDateSwedish(renewalDateISO);
+
+        const idempotencyKey = `${sub.id}-${renewalDateISO}`;
+
+        const recipientEmail = TEST_MODE
+          ? "olivkassen@gmail.com"
+          : email;
+
+        if (!DRY_RUN) {
+          await resend.emails.send(
+            {
+              from: "Olivkassen <renewals@olivkassen.com>",
+              to: recipientEmail,
+              subject: "Snart dags för nästa leverans",
+              template: {
+                id: process.env.RESEND_TEMPLATE_ID,
+                variables: {
+                  name: firstName,
+                  product_title: productTitle,
+                  plan_interval: planInterval,
+                  renewal_date: formattedDate,
+                  portal_url: process.env.PORTAL_URL,
+                },
+              },
+            },
+            { idempotencyKey }
+          );
+
+          /*
+          MARK AS SENT IN STRIPE METADATA
+          */
+          await stripe.subscriptions.update(sub.id, {
+            metadata: {
+              ...sub.metadata,
+              renewal_reminder_sent: renewalDateISO,
+            },
+          });
+
+          emailsSent++;
+        }
+
+        slackDetails.push(
+          `• ${customer.name} (${recipientEmail}) → ${renewalDateISO}`
+        );
       }
 
-      slackDetails.push(
-        `• ${customer.name} (${recipientEmail}) → ${renewalDateISO}`
-      );
+      hasMore = page.has_more;
+      if (hasMore) {
+        startingAfter = page.data[page.data.length - 1].id;
+      }
+
     }
 
     /*
