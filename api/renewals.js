@@ -9,7 +9,7 @@ PRODUCTION CONTROLS
 */
 const TEST_MODE = false;        // true = send to test inbox only
 const DRY_RUN = false;          // true = no emails sent at all
-const MAX_EMAILS_PER_RUN = 1;  // safety cap
+const MAX_EMAILS_PER_RUN = 25;  // safety cap
 
 function formatDateSwedish(dateString) {
   return new Date(dateString).toLocaleDateString("sv-SE", {
@@ -95,7 +95,6 @@ export default async function handler(req, res) {
 
         const customer = sub.customer;
         const email = customer.email;
-        if (email !== "acs.pilback@gmail.com") continue;
         const firstName = cleanFirstName(customer.name);
 
         const price = sub.items.data[0].price;
@@ -110,7 +109,7 @@ export default async function handler(req, res) {
         const planInterval = translateInterval(intervalCount);
         const formattedDate = formatDateSwedish(renewalDateISO);
 
-        const idempotencyKey = `${sub.id}-${renewalDateISO}`;
+        const idempotencyKey = `${sub.id}-${renewalDateISO}-resend-20260311`;
 
         const recipientEmail = TEST_MODE
           ? "olivkassen@gmail.com"
