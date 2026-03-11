@@ -50,7 +50,6 @@ export default async function handler(req, res) {
       expand: [
         "data.customer",
         "data.items.data.price",
-        "data.items.data.price.product"
       ]
     });
 
@@ -70,7 +69,6 @@ export default async function handler(req, res) {
         expand: [
           "data.customer",
           "data.items.data.price",
-          "data.items.data.price.product"
         ]
       });
 
